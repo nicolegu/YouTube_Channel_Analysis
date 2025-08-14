@@ -1,0 +1,13 @@
+gitignore
+
+# Virtual environment
+env/
+
+# API keys and secrets
+config.py
+
+# Python cache file
+__pycache__/
+
+# Data
+Data/
