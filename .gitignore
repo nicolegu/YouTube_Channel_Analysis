@@ -10,4 +10,4 @@ config.py
 __pycache__/
 
 # Data
-Data/
+Data/.DS_Store
