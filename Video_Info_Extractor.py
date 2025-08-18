@@ -181,6 +181,98 @@ class YouTubeChannelExtractor:
 
         return video_details
     
+    def get_video_comments(self, video_id, max_results = 100, order = 'time', include_replies = False):
+        comments = []
+        next_page_token = None
+
+        print(f"Extracting comments from video: {video_id}")
+        print(f"Max results: {max_results}, Include replies: {include_replies}")
+
+        while len(comments) < max_results:
+            batch_size = min(100, max_results - len(comments))
+
+            url = f"{self.base_url}/commentThreads"
+            params = {
+                'key': self.api_key,
+                'videoId': video_id,
+                'part': 'snippet,replies',
+                'maxResults': batch_size,
+                'order': order,
+                'textFormat': 'plainText'
+            }
+
+            if next_page_token:
+                params['pageToken'] = next_page_token
+
+            try:
+                response = requests.get(url, params = params)
+                response.raise_for_status() # raise HTTPError
+                data = response.json()
+
+                if 'items' not in data:
+                    print("No more comments found")
+                    break
+
+                for item in data['items']:
+                    top_comment = item['snippet']['topLevelComment']['id']
+
+                    comment_data = {
+                        'comment_id': item['snippet']['topLevelComment']['id'],
+                        'video_id':video_id,
+                        'author_name': top_comment['authorDisplayName'],
+                        'author_channel_id': top_comment.get('authorChannelId, {}').get('value', ''),
+                        'comment_text': top_comment['textDisplay'],
+                        'comment_text_original': top_comment['textOriginal'],
+                        'like_count': top_comment['likeCount'],
+                        'published_at': top_comment['publishedAt'],
+                        'updated_at': top_comment['updatedAt'],
+                        'reply_count': item['snippet']['totalReplyCount'],
+                        'is_reply': False,
+                        'parent_comment_id': None
+                    }
+
+                    comments.append(comment_data)
+
+                    if include_replies and item['snippet']['totalReplyCount'] > 0:
+                        if 'replies' in item:
+                            for reply in item['replies']['comments']:
+                                reply_snippet = reply['snippet']
+                                reply_data = {
+                                    'comment_id': reply['id'],
+                                    'video_id': video_id,
+                                    'author_name': reply_snippet['authorDisplayName'],
+                                    'author_channel_id': reply_snippet.get('authorChannelId', {}).get('value', ''),
+                                    'comment_text': reply_snippet['textDisplay'],
+                                    'comment_text_original': reply_snippet['textOriginal'],
+                                    'like_count': reply_snippet['likeCount'],
+                                    'published_at': reply_snippet['publishedAt'],
+                                    'updated_at': reply_snippet['updatedAt'],
+                                    'reply_count': 0,
+                                    'is_reply': True,
+                                    'parent_comment_id': item['snippet']['topLevelComment']['id']
+                                }
+
+                                comments.append(reply_data)
+
+                    next_page_token = data.get('nextPageToken')
+
+                    if not next_page_token:
+                        print('Reached end of available comments')
+                        break
+
+                    print(f"Collected {len(comments)} comments so far...")
+                    time.sleep(0.1)
+
+            except requests.exceptions.RequestException as e:
+                print(f"Error fetching comments: {e}")
+                if hasattr(e, 'response') and e.response is not None:
+                    print(f"Response: {e.response.text}")
+                break
+            except Exception as e:
+                print(f"Unexpected error: {e}")
+                break
+        
+    
     def extract_channel_videos(self, channel_identifier, max_videos = 100, truncate_description = False, description_limit = 500):
         """
         Main method to extract video information from a channel
