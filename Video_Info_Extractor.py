@@ -214,13 +214,13 @@ class YouTubeChannelExtractor:
                     break
 
                 for item in data['items']:
-                    top_comment = item['snippet']['topLevelComment']['id']
+                    top_comment = item['snippet']['topLevelComment']['snippet']
 
                     comment_data = {
                         'comment_id': item['snippet']['topLevelComment']['id'],
                         'video_id':video_id,
                         'author_name': top_comment['authorDisplayName'],
-                        'author_channel_id': top_comment.get('authorChannelId, {}').get('value', ''),
+                        'author_channel_id': top_comment.get('authorChannelId', {}).get('value', ''),
                         'comment_text': top_comment['textDisplay'],
                         'comment_text_original': top_comment['textOriginal'],
                         'like_count': top_comment['likeCount'],
@@ -254,14 +254,14 @@ class YouTubeChannelExtractor:
 
                                 comments.append(reply_data)
 
-                    next_page_token = data.get('nextPageToken')
+                next_page_token = data.get('nextPageToken')
 
-                    if not next_page_token:
-                        print('Reached end of available comments')
-                        break
+                if not next_page_token:
+                    print('Reached end of available comments')
+                    break
 
-                    print(f"Collected {len(comments)} comments so far...")
-                    time.sleep(0.1)
+                print(f"Collected {len(comments)} comments so far...")
+                time.sleep(0.1)
 
             except requests.exceptions.RequestException as e:
                 print(f"Error fetching comments: {e}")
@@ -271,9 +271,11 @@ class YouTubeChannelExtractor:
             except Exception as e:
                 print(f"Unexpected error: {e}")
                 break
+
+        return comments
         
     
-    def extract_channel_videos(self, channel_identifier, max_videos = 100, truncate_description = False, description_limit = 500):
+    def extract_channel_videos(self, channel_identifier, max_videos = 100, truncate_description = False, description_limit = 500, extract_comments = True, max_comments_per_video = 100):
         """
         Main method to extract video information from a channel
         channel_identifier can be: channel_id, username, or channel url
@@ -319,7 +321,7 @@ class YouTubeChannelExtractor:
             processed_video = {
                 'video_id': video['id'],
                 'title': snippet.get('title', ''),
-                'description': snippet.get('description', '')[:500][:description_limit] if truncate_description else snippet.get('description', ''),
+                'description': snippet.get('description', '')[:description_limit] if truncate_description else snippet.get('description', ''),
                 'published_at': snippet.get('publishedAt', ''),
                 'duration': content_details.get('duration', ''),
                 'view_count': int(statistics.get('viewCount', 0)),
@@ -344,10 +346,38 @@ class YouTubeChannelExtractor:
             'extraction_date': datetime.now().isoformat()
         }
 
-        return {
+        result = {
             'channel_summary': summary,
             'videos': processed_videos
         }
+
+        if extract_comments:
+            all_comments = []
+
+            for video in processed_videos:
+                video_id = video['video_id']
+                print(f"Extracting comments for: {video['title']}")
+
+                try:
+                    comments = self.get_video_comments(
+                        video_id = video_id,
+                        max_results = max_comments_per_video,
+                        include_replies = True
+                        )
+
+                    all_comments.extend(comments)
+                    time.sleep(0.5)
+
+                except Exception as e:
+                    print(f"Failed to get comments for {video_id}: {e}")
+                    continue
+
+            result['comments'] = all_comments
+            result['channel_summary']['total_comments'] = len(all_comments)
+            result['channel_summary']['videos_with_comments'] = len(set(c['video_id'] for c in all_comments))
+
+
+        return result
     
     def save_to_files(self, data, base_filename, output_dir = 'Data'):
         """
@@ -364,12 +394,20 @@ class YouTubeChannelExtractor:
         with open(json_filename, 'w', encoding = 'utf-8') as f:
             json.dump(data, f, indent = 2, ensure_ascii = False)
         print(f"Complete data saved to: {json_filename}")
-
-        if data['videos']:
+        
+        # Save videos CSV
+        if 'videos' in data and data['videos']:
             csv_filename = os.path.join(output_dir, f"{base_filename}_videos.csv")
             df = pd.DataFrame(data['videos'])
             df.to_csv(csv_filename, index = False, encoding = 'utf-8')
             print(f"Videos data saved to: {csv_filename}")
+         
+        # Save comments CSV separately
+        if 'comments' in data and data['comments']:
+            comments_filename = os.path.join(output_dir, f"{base_filename}_comments.csv")
+            comments_df = pd.DataFrame(data['comments'])
+            comments_df.to_csv(comments_filename, index = False, encoding = 'utf-8')
+            print(f"Comments data saved to: {comments_filename}")
 
         summary_filename = os.path.join(output_dir, f"{base_filename}_summary.txt")
         with open(summary_filename, 'w', encoding='utf-8') as f:
@@ -378,6 +416,9 @@ class YouTubeChannelExtractor:
             f.write(f"Subscribers: {summary['subscriber_count']}\n")
             f.write(f"Total Videos: {summary['total_videos']}\n")
             f.write(f"Videos Extracted: {summary['videos_extracted']}\n")
+            if 'total_comments' in summary:
+                f.write(f"Total Comments: {summary['total_comments']}\n")
+                f.write(f"Videos with Comments: {summary['videos_with_comments']}\n")
             f.write(f"Extraction Date: {summary['extraction_date']}\n")
             f.write(f"Description: {summary['channel_description']}\n")
         print(f"Summary saved to: {summary_filename}")

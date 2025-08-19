@@ -7,9 +7,10 @@ def main():
 
     channel_to_extract = 'https://www.youtube.com/@jetpens'
     max_videos = 1000
+    max_comments_per_video = 100
 
     try:
-        data = client.extract_channel_videos(channel_to_extract, max_videos)
+        data = client.extract_channel_videos(channel_to_extract, max_videos, max_comments_per_video)
 
         if data:
             print("\n" + "="*50)
@@ -19,6 +20,7 @@ def main():
             summary = data['channel_summary']
             print(f"Channel: {summary['channel_name']}")
             print(f"Videos extracted: {summary['videos_extracted']}")
+            print(f"Total comments: {summary['total_comments']}")
 
             videos = sorted(data['videos'], key = lambda x: x['view_count'], reverse=True)
             print(f"\nTop 5 videos by views:")
