@@ -309,6 +309,124 @@ class YouTubeMetricsTracker:
 
         except Exception as e:
             self.logger.error(f"Error collecting video metrics: {e}")
+            return False
+        
+    def get_video_details(self, video_ids):
+        """
+        Get detailed information for videos
+        """
+        video_details = []
 
+        for i in range(0, len(video_ids), 50):
+            batch_ids = video_ids[i:i+50]
+            ids_string = ','.join(batch_ids)
 
+            url = f"{self.base_url}/videos"
+            params = {
+                'key': self.api_key,
+                'id': ids_string,
+                'part': 'snippet,statistics,contentDetails'
+            }
 
+            response = requests.get(url, params=params)
+            data = response.json()
+
+            if 'items' in data:
+                video_details.extend(data['items'])
+
+            time.sleep(0.1) # Rate limiting
+
+        return video_details
+    
+    def collect_all_tracked_channels(self):
+        """
+        Collect metrics for all active tracked channels
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            '''
+            SELECT channel_id, channel_name
+              FROM tracking_config
+              WHERE active = 1
+            ''')
+        
+        channels = cursor.fetchall()
+        conn.close()
+
+        self.logger.info(f"Starting collection for {len(channels)} tracked channels")
+
+        for channel_id, channel_name in channels:
+            self.logger.info(f"Collecting metrics for {channel_name}")
+            self.collect_channel_metrics(channel_id)
+            time.sleep(1)
+
+        self.logger.info("Collection completed for all tracked channels")
+
+    def setup_automated_collection(self, interval_hours = 12):
+        """
+        Setup automated metric collection
+        """
+        def job():
+            self.logger.info("Running scheduled collection...")
+            self.collect_all_tracked_channels()
+
+        # Schedule the job
+        schedule.every(interval_hours).hours.do(job)
+
+        self.logger.info(f"Automated collection scheduled every {interval_hours} hours")
+        self.logger.info(f"Run tracker.run_scheduler() to start the automated collection")
+
+    def run_scheduler(self):
+        """
+        Run the automated scheduler
+        """
+        self.logger.info("Starting automated scheduler...")
+        while True:
+            schedule.run_pending()
+            time.sleep(60)
+
+    def export_data(self, channel_id, output_format = 'csv', days = None):
+        """
+        Export tracking data
+        """
+        conn = sqlite3.connect(self.db_path)
+
+        # Base query
+        base_query = '''
+                     SELECT * FROM channel_metrics
+                      WHERE channel_id = ?
+                     '''
+        
+        params = [channel_id]
+        if days:
+            base_query += " AND timestamp >= datetime('now', '-{} days')".format(days)
+        
+        base_query += " ORDER BY timestamp"
+
+        df = pd.read_sql_query(base_query, conn, parse_dates=['timestamp'])
+        conn.close()
+
+        if df.empty:
+            self.logger.warning(f"No data to export for channel {channel_id}")
+            return None
+        
+        # Generate filename
+        channel_name = df.iloc[0]['channel_name'].replace(' ', '_')
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+        if output_format.lower() == '.csv':
+            filename = f"{channel_name}_metrics_{timestamp}.csv"
+            df.to_csv(filename, index=False)
+
+        elif output_format.lower() == '.json':
+            filename = f"{channel_name}_metrics_{timestamp}.json"
+            df.to_json(filename, orient='records', date_format='iso')
+        
+        else:
+            self.logger.error(f"Unsupported format: {output_format}")
+            return None
+        
+        self.logger.info(f"Data exported to: {filename}")
+        return filename
