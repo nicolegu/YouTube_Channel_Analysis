@@ -56,6 +56,7 @@ class YouTubeMetricsTracker:
                        )
                        ''')
         
+        # Video metrics table
         cursor.execute('''
                        CREATE TABLE IF NOT EXISTS video_metrics (
                            id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,6 +71,7 @@ class YouTubeMetricsTracker:
                            published_at TEXT)
                        ''')
         
+        # 
         cursor.execute('''
                        CREATE TABLE IF NOT EXISTS tracking_config (
                            id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -159,6 +161,10 @@ class YouTubeMetricsTracker:
         """
         if '/channel/' in url:
             return url.split('/channel/')[-1].split('/')[0]
+        elif '/c/' in url:
+            return url.split('/c/')[-1].split('/')[0]
+        elif '/@' in url:
+            return url.split('/@')[-1].split('/')[0]
         # Add other URL parsing logic as needed
         return None
     
@@ -243,7 +249,7 @@ class YouTubeMetricsTracker:
                        ''', (channel_id,))
         
         config = cursor.fetchone() # Return the next row query result
-        if not config or not config[0]:
+        if not config or not config[0]: # Check if there is an additional channel to track
             conn.close()
             return
         
