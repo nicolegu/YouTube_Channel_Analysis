@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 from pathlib import Path
 import logging
+import threading
 
 
 class YouTubeMetricsTracker:
@@ -370,7 +371,7 @@ class YouTubeMetricsTracker:
 
         self.logger.info("Collection completed for all tracked channels")
 
-    def setup_automated_collection(self, interval_hours = 12):
+    def setup_automated_collection(self, interval_hours = 12, run_immediately = True):
         """
         Setup automated metric collection
         """
@@ -382,16 +383,41 @@ class YouTubeMetricsTracker:
         schedule.every(interval_hours).hours.do(job)
 
         self.logger.info(f"Automated collection scheduled every {interval_hours} hours")
-        self.logger.info(f"Run tracker.run_scheduler() to start the automated collection")
+        
+        # Optionally run immediately
+        if run_immediately:
+            self.logger.info("Running initial collections...")
+            self.collect_all_tracked_channels()
 
-    def run_scheduler(self):
-        """
-        Run the automated scheduler
-        """
         self.logger.info("Starting automated scheduler...")
-        while True:
-            schedule.run_pending()
-            time.sleep(60)
+        try:
+            while True:
+                schedule.run_pending()
+                time.sleep(60)
+        except KeyboardInterrupt:
+            self.logger.info("Automated collection stopped by user")
+        except Exception as e:
+            self.logger.error(f"Scheduler error: {e}")
+
+    def start_automated_collection_background(self, interval_hours = 12):
+        """
+        Start automated collection in a background thread
+        Returns the thread object so you can control it
+        """
+        def scheduler_worker():
+            self.start_automated_collection(interval_hours)
+
+        scheduler_thread = threading.Thread(target = scheduler_worker, daemon = True)
+        scheduler_thread.start()
+        self.logger.info("Started automated collection in background")
+        return scheduler_thread
+
+    def stop_automated_collection(self):
+        """
+        Stop all scheduled jobs
+        """
+        schedule.clear()
+        self.logger.info("Stopped automated collection")
 
     def export_data(self, channel_id, output_format = 'csv', days = None):
         """
