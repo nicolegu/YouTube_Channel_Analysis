@@ -371,9 +371,9 @@ class YouTubeMetricsTracker:
 
         self.logger.info("Collection completed for all tracked channels")
 
-    def setup_automated_collection(self, interval_hours = 12, run_immediately = True):
+    def start_automated_collection(self, interval_hours = 12, run_immediately = True):
         """
-        Setup automated metric collection
+        Start automated metric collection
         """
         def job():
             self.logger.info("Running scheduled collection...")
@@ -399,13 +399,13 @@ class YouTubeMetricsTracker:
         except Exception as e:
             self.logger.error(f"Scheduler error: {e}")
 
-    def start_automated_collection_background(self, interval_hours = 12):
+    def start_automated_collection_background(self, interval_hours = 12, run_immediately = True):
         """
         Start automated collection in a background thread
         Returns the thread object so you can control it
         """
         def scheduler_worker():
-            self.start_automated_collection(interval_hours)
+            self.start_automated_collection(interval_hours, run_immediately)
 
         scheduler_thread = threading.Thread(target = scheduler_worker, daemon = True)
         scheduler_thread.start()
