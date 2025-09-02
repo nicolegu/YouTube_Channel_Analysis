@@ -18,8 +18,8 @@ class YouTubeMetricsTracker:
         self.api_key = api_key
         self.base_url = "https://www.googleapis.com/youtube/v3"
         self.db_path = db_path
-        self.setup_database()
         self.setup_logging()
+        self.setup_database()
 
     def setup_logging(self):
         """
@@ -163,11 +163,14 @@ class YouTubeMetricsTracker:
         if '/channel/' in url:
             return url.split('/channel/')[-1].split('/')[0]
         elif '/c/' in url:
-            return url.split('/c/')[-1].split('/')[0]
+            channel_name = url.split('/c/')[-1].split('/')[0]
+            return self.search_channel_by_name(channel_name)
         elif '/@' in url:
-            return url.split('/@')[-1].split('/')[0]
+            handle = url.split('/@')[-1].split('/')[0]
+            return self.search_channel_by_name(handle)
         # Add other URL parsing logic as needed
-        return None
+        else:
+            return None
     
     def search_channel_by_name(self, name):
         """
@@ -419,7 +422,7 @@ class YouTubeMetricsTracker:
         schedule.clear()
         self.logger.info("Stopped automated collection")
 
-    def export_data(self, channel_id, output_format = 'csv', days = None):
+    def export_data(self, channel_id, output_format = '.csv', days = None):
         """
         Export tracking data
         """
@@ -433,11 +436,13 @@ class YouTubeMetricsTracker:
         
         params = [channel_id]
         if days:
-            base_query += " AND timestamp >= datetime('now', '-{} days')".format(days)
+            base_query += " AND timestamp >= datetime('now', '-' || ? || ' days')"
+
+            params = [channel_id, days]
         
         base_query += " ORDER BY timestamp"
 
-        df = pd.read_sql_query(base_query, conn, parse_dates=['timestamp'])
+        df = pd.read_sql_query(base_query, conn, params = params, parse_dates=['timestamp'])
         conn.close()
 
         if df.empty:
