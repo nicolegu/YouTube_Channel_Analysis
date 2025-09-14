@@ -11,12 +11,14 @@ import threading
 
 
 class YouTubeMetricsTracker:
-    def __init__(self, api_key, db_path = 'youtube_metrics.db'):
+    def __init__(self, api_key, max_retries = 3, retry_delay = 60, db_path = 'youtube_metrics.db'):
         """
         Initialize the YouTube metrics tracker
         """
         self.api_key = api_key
         self.base_url = "https://www.googleapis.com/youtube/v3"
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
         self.db_path = db_path
         self.setup_logging()
         self.setup_database()
@@ -128,6 +130,21 @@ class YouTubeMetricsTracker:
         finally:
             conn.close()
 
+    def get_channel_info_with_retry(self, channel_identifier):
+        """
+        Get channel info with retry logic for network errors
+        """
+        for attempt in range(self.max_retries):
+            try:
+                return self.get_channel_info(channel_identifier)
+            except (ConnectionError, TimeoutError, requests.exceptions.RequestException) as e:
+                self.logger.warning(f"API call failed (attempt {attempt + 1}/{self.max_retries})")
+                if attempt < self.max_retries - 1:
+                    time.sleep(self.retry_delay)
+                else:
+                    self.logger.error("Max retries reached for API call.")
+                    return None
+
     def get_channel_info(self, channel_identifier):
         """
         Get basic channel information
@@ -149,13 +166,34 @@ class YouTubeMetricsTracker:
             'part': 'snippet,statistics,contentDetails'
         }
 
-        response = requests.get(url, params = params)
-        data = response.json()
+        try:
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
 
-        if 'items' in data and data['items']:
-            return data['items'][0]
-        return None
-    
+            if 'items' in data and data['items']:
+                return data['items'][0]
+            return None
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"API request failed: {e}")
+            raise
+
+    def collect_metrics_with_retry(self, channel_identifier):
+        """
+        Collect metrics with retry logic
+        """
+        for attempt in range(self.max_retries):
+            try:
+                return self.collect_all_tracked_channels()
+            except (ConnectionError, TimeoutError, requests.exceptions.RequestException) as e:
+                self.logger.warning(f"Connection failed (attempt {attempt + 1}/{self.max_retries}): {e}")
+                if attempt < self.max_retries - 1:
+                    self.logger.info(f"Retrying in {self.retry_delay} seconds...")
+                    time.sleep(self.retry_delay)
+                else:
+                    self.logger.error("Max retries reached. Skipping this collection cycle.")
+                    return None
+
     def extract_channel_id_from_url(self, url):
         """
         Extract channel ID from URL
@@ -374,13 +412,29 @@ class YouTubeMetricsTracker:
 
         self.logger.info("Collection completed for all tracked channels")
 
+    def collect_metrics_with_retry(self):
+        """
+        Collect metrics with retry logic
+        """
+        for attempt in range(self.max_retries):
+            try:
+                return self.collect_all_tracked_channels()
+            except (ConnectionError, TimeoutError, requests.exceptions.RequestException) as e:
+                self.logger.info(f"Connection failed (attempt {attempt + 1}/{self.max_retries}): {e}")
+                if attempt < self.max_retries - 1:
+                    self.logger.info(f"Retrying in {self.retry_delay} seconds...")
+                    time.sleep(self.retry_delay)
+                else:
+                    self.logger.error("Max retries reached. Skipping this collection cycle.")
+                    return None
+
     def start_automated_collection(self, interval_hours = 12, run_immediately = True):
         """
         Start automated metric collection
         """
         def job():
             self.logger.info("Running scheduled collection...")
-            self.collect_all_tracked_channels()
+            self.collect_metrics_with_retry()
 
         # Schedule the job
         schedule.every(interval_hours).hours.do(job)
@@ -390,7 +444,7 @@ class YouTubeMetricsTracker:
         # Optionally run immediately
         if run_immediately:
             self.logger.info("Running initial collections...")
-            self.collect_all_tracked_channels()
+            self.collect_metrics_with_retry()
 
         self.logger.info("Starting automated scheduler...")
         try:
