@@ -73,8 +73,24 @@ class YouTubeMetricsTracker:
                            duration TEXT,
                            published_at TEXT)
                        ''')
+        # Comments table
+        cursor.execute('''
+                       CREATE TABLE IF NOT EXISTS comments (
+                           id INTEGER PRIMARY KEY AUTOINCREMENT,
+                           comment_id TEXT NOT NULL,
+                           video_id TEXT NOT NULL,
+                           author_name TEXT NOT NULL,
+                           author_channel_id TEXT NOT NULL,
+                           comment_text TEXT,
+                           like_count INTEGER,
+                           published_at TEXT,
+                           updated_at TEXT,
+                           reply_count INTEGER,
+                           is_reply BOOLEAN DEFAULT 0,
+                           parent_comment_id TEXT)
+                       ''')
         
-        # 
+        # Channel config table
         cursor.execute('''
                        CREATE TABLE IF NOT EXISTS tracking_config (
                            id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -247,7 +263,7 @@ class YouTubeMetricsTracker:
             cursor = conn.cursor()
 
             cursor.execute('''
-                           INSERT INTO channel_metrics
+                           INSERT OR REPLACE INTO channel_metrics
                            (channel_id, channel_name, subscriber_count, video_count, view_count,
                             custom_url, country, published_at)
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -336,7 +352,7 @@ class YouTubeMetricsTracker:
                 content_details = video.get('contentDetails', {})
 
                 cursor.execute('''
-                               INSERT INTO video_metrics
+                               INSERT OR REPLACE INTO video_metrics
                                (video_id, channel_id, title, view_count, like_count,
                                 comment_count, duration, published_at)
                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -386,6 +402,153 @@ class YouTubeMetricsTracker:
 
         return video_details
     
+    def get_video_comments(self, video_id, max_results = 100, order = 'time', include_replies = False):
+        """
+        Collect and store comments for a specific video
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        comments_collected = 0
+        next_page_token = None
+
+        self.logger.info(f"Collecting comments for video: {video_id} (max: {max_results})")
+
+        try:
+            while comments_collected < max_results:
+                batch_size = min(100, max_results - comments_collected)
+
+                url = f"{self.base_url}/commentThreads"
+                params = {
+                    'key': self.api_key,
+                    'videoId': video_id,
+                    'part': 'snippet,replies',
+                    'maxResults': batch_size,
+                    'order': order,
+                    'textFormat': 'plainText'
+                }
+
+                if next_page_token:
+                    params['pageToken'] = next_page_token
+
+                response = requests.get(url, params = params, timeout = 30)
+                response.raise_for_status()
+                data = response.json()
+
+                if 'items' not in data or not data['items']:
+                    self.logger.info("No more comments found")
+                    break
+
+                for item in data['items']:
+                    try:
+                        top_comment = item['snippet']['topLevelComment']['snippet']
+                        comment_id = item['snippet']['topLevelComment']['id']
+
+                        cursor.execute('''
+                                       INSERT OR REPLACE INTO comments
+                                       (comment_id, video_id, author_name, author_channel_id, comment_text,
+                                        like_count, published_at, updated_at, reply_count, is_reply, parent_comment_id)
+                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?. ?)
+                                       ''', (
+                                           comment_id,
+                                           video_id,
+                                           top_comment['authorDisplayName'],
+                                           top_comment.get('authorChannelId', {}).get('value', ''),
+                                           top_comment['textDisplay'],
+                                           top_comment['likeCount'],
+                                           top_comment['publishedAt'],
+                                           top_comment['updatedAt'],
+                                           item['snippet']['totalReplyCount'],
+                                           False,
+                                           None
+                                       ))
+                        comments_collected += 1
+
+                        # Handle replies if requested and available
+                        if include_replies and item['snippet']['totalReplyCount'] > 0:
+                            if 'replies' in item and 'comments' in item['replies']:
+                                for reply in item['replies']['comments']:
+                                    if comments_collected >= max_results:
+                                        break
+
+                                reply_snippet = reply['snippet']
+
+                                cursor.execute('''
+                                               INSERT OR REPLACE INTO comments
+                                               (comment_id, video_id, author_name, author_channel_id, comment_text,
+                                                like_count, published_at, updated_at, reply_count, is_reply, parent_comment_id)
+                                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?. ?)
+                                               ''', (
+                                                   reply['id'],
+                                                   video_id,
+                                                   reply_snippet['authorDisplayName'],
+                                                   reply_snippet.get('authorChannelId', {}).get('value', ''),
+                                                   reply_snippet['textDisplay'],
+                                                   reply_snippet['likeCount'],
+                                                   reply_snippet['publishedAt'],
+                                                   reply_snippet['updatedAt'],
+                                                   0,
+                                                   True,
+                                                   comment_id
+                                               ))
+                                comments_collected += 1
+
+                                if comments_collected >= max_results:
+                                    break
+                    except Exception as e:
+                        self.logger.warning(f"Error processing comment: {e}")
+                        continue
+                conn.commit()
+
+                next_page_token = data.get('nextPageToken')
+                if not next_page_token:
+                    self.logger.info("Reached end of available comments")
+                    break
+
+                self.logger.info(f"Collected {comments_collected} comments so far...")
+                time.sleep(0.1)
+
+        except requests.exceptions.RequestException as e:
+                self.logger.error(f"API error collecting comments: {e}")
+                return False
+        except Exception as e:
+                self.logger.error(f"Unexpected error collecting comments: {e}")
+                return False
+        finally:
+                conn.close()
+
+        self.logger.info(f"Successfully collected {comments_collected} comments for video {video_id}")
+        return comments_collected
+    
+    def collect_comments_for_tracked_videos(self, days_back = 7, max_comments_per_video = 50):
+        """
+        Collect comments for recent videos from all tracked channels
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Get recent videos from tracked channels
+        cursor.execute('''
+                       SELECT DISTINCT vm.video_id, vm.title, vm.channel_id
+                         FROM video_metrics vm
+                         JOIN tracking_config tc ON vm.channel_id = tc.channel_id
+                        WHERE tc.active = 1
+                             AND vm.timestamp >= datetime('now', '-' || ? || 'days')
+                        ORDER BY vm.timestamp DESC
+                       ''', (days_back,))
+        
+        videos = cursor.fetchall()
+        conn.close()
+
+        self.logger.info(f"Collecting comments for {len(videos)} recent videos")
+
+        for video_id, title, channel_id in videos:
+            self.logger.info(f"Collecting comments for: {title}")
+            self.get_video_comments(video_id, max_comments_per_video)
+            time.sleep(1)
+
+        return len(videos)
+    
     def collect_all_tracked_channels(self):
         """
         Collect metrics for all active tracked channels
@@ -428,7 +591,7 @@ class YouTubeMetricsTracker:
                     self.logger.error("Max retries reached. Skipping this collection cycle.")
                     return None
 
-    def start_automated_collection(self, interval_hours = 12, run_immediately = True):
+    def start_automated_collection(self, interval_hours = 1, run_immediately = True):
         """
         Start automated metric collection
         """
@@ -456,7 +619,7 @@ class YouTubeMetricsTracker:
         except Exception as e:
             self.logger.error(f"Scheduler error: {e}")
 
-    def start_automated_collection_background(self, interval_hours = 12, run_immediately = True):
+    def start_automated_collection_background(self, interval_hours = 1, run_immediately = True):
         """
         Start automated collection in a background thread
         Returns the thread object so you can control it
