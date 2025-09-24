@@ -292,6 +292,38 @@ class YouTubeMetricsTracker:
             self.logger.error(f"Error collecting channel metrics: {e}")
             return False
         
+    def get_videos_to_track(self, channel_id):
+        """
+        Get videos that should be tracked based on strategy
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Get channel config
+        cursor.execute('''
+                       SELECT video_tracking_strategy, video_tracking_days, max_videos_to_track
+                         FROM tracking_config
+                        WHERE channel_id = ?
+                       ''', (channel_id,))
+        
+        config = cursor.fetchone()
+        strategy, days, max_videos = config or ('time_based', 30, 50)
+
+        if strategy == 'time_based':
+            # Track videos published within timeframe
+            query = '''
+                SELECT video_id FROM video_metrics
+                 WHERE channel_id = ?
+                      AND published_at >= datetime('now', '-' || ? || ' days')
+                 ORDER BY published_at DESC
+                 LIMIT ?
+            '''
+            cursor.execute(query, (channel_id, days, max_videos))
+        
+        videos = cursor.fetchall()
+        conn.close()
+        return [v[0] for v in videos]
+        
     def collect_video_metrics(self, channel_id):
         """
         Collect metrics for top videos of a channel
