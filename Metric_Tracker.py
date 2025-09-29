@@ -107,7 +107,7 @@ class YouTubeMetricsTracker:
         conn.close()
         self.logger.info("Database setup completed")
     
-    def add_channel_to_tracking(self, channel_identifier, track_videos = True, max_videos = 10):
+    def add_channel_to_tracking(self, channel_identifier, track_videos = True, max_videos = 50):
         """
         Add a channel to the tracking list
         """
@@ -292,6 +292,29 @@ class YouTubeMetricsTracker:
             self.logger.error(f"Error collecting channel metrics: {e}")
             return False
         
+    def update_tracking_strategy(self, channel_id, strategy):
+        """
+        Update tracking strategy with validation
+        Alternative way to impose restrictions after initializing tables in SQLite
+        """
+        valid_strategies = {'time_based', 'recent_count', 'hybrid'}
+
+        if strategy not in valid_strategies:
+            raise ValueError(f"Invalid strategy: {strategy}. Must be one of {valid_strategies}")
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            UPDATE tracking_config
+            SET video_tracking_strategy = ?
+            WHERE channel_id = ?
+        ''', (strategy, channel_id))
+
+        conn.commit()
+        conn.close()
+
+        
     def get_videos_to_track(self, channel_id):
         """
         Get videos that should be tracked based on strategy
@@ -307,7 +330,11 @@ class YouTubeMetricsTracker:
                        ''', (channel_id,))
         
         config = cursor.fetchone()
-        strategy, days, max_videos = config or ('time_based', 30, 50)
+
+        if config and len(config) >= 3:
+            strategy, days, max_videos = config[0] or 'time_based', config[1] or 30, config[2] or 50
+        else:
+            strategy, days, max_videos = 'time_based', 30, 50
 
         if strategy == 'time_based':
             # Track videos published within timeframe
@@ -316,9 +343,41 @@ class YouTubeMetricsTracker:
                  WHERE channel_id = ?
                       AND published_at >= datetime('now', '-' || ? || ' days')
                  ORDER BY published_at DESC
+            '''
+            cursor.execute(query, (channel_id, days))
+
+        elif strategy == 'recent_count':
+            # Track most recent videos: fixed number
+            query = '''
+                SELECT video_id FROM video_metrics
+                 WHERE channel_id = ?
+                 ORDER BY published_at DESC
+                 LIMIT ?
+            '''
+            cursor.execute(query, (channel_id, max_videos))
+
+        elif strategy == 'hybrid':
+            # Use time window but cap at max_videos_to_track
+            query = '''
+                SELECT video_id FROM video_metrics
+                 WHERE channel_id = ?
+                      AND published_at >= datetime('now', '-' || ? || ' days')
+                 ORDER BY published_at DESC
                  LIMIT ?
             '''
             cursor.execute(query, (channel_id, days, max_videos))
+
+        else:
+            # Invalid strategy, default to time_based
+            self.logger.warning(f"Invalid startegy '{strategy}', defaulting to time_based")
+            query = '''
+                SELECT video_id FROM video_metrics
+                 WHERE channel_id = ?
+                      AND published_at >= datetime('now', '-' || ? || ' days')
+                 ORDER BY published_at DESC
+
+            '''
+            cursor.execute(query, (channel_id, days))
         
         videos = cursor.fetchall()
         conn.close()
@@ -480,7 +539,7 @@ class YouTubeMetricsTracker:
                                        INSERT OR REPLACE INTO comments
                                        (comment_id, video_id, author_name, author_channel_id, comment_text,
                                         like_count, published_at, updated_at, reply_count, is_reply, parent_comment_id)
-                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?. ?)
+                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                        ''', (
                                            comment_id,
                                            video_id,
@@ -509,7 +568,7 @@ class YouTubeMetricsTracker:
                                                INSERT OR REPLACE INTO comments
                                                (comment_id, video_id, author_name, author_channel_id, comment_text,
                                                 like_count, published_at, updated_at, reply_count, is_reply, parent_comment_id)
-                                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?. ?)
+                                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                                ''', (
                                                    reply['id'],
                                                    video_id,
@@ -565,7 +624,7 @@ class YouTubeMetricsTracker:
                          FROM video_metrics vm
                          JOIN tracking_config tc ON vm.channel_id = tc.channel_id
                         WHERE tc.active = 1
-                             AND vm.timestamp >= datetime('now', '-' || ? || 'days')
+                             AND vm.timestamp >= datetime('now', '-' || ? || ' days')
                         ORDER BY vm.timestamp DESC
                        ''', (days_back,))
         
