@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import logging
+import re
 from datetime import datetime
 
 class MigrationManager:
@@ -47,10 +48,12 @@ class MigrationManager:
         Get list of migrations that need to be applied
         """
 
+        migration_pattern = re.compile(r'^\d{3}_.*\.py$')
+
         # Find all migration files
         migration_files = []
         for filename in os.listdir(self.migrations_dir):
-            if filename.endswith('.py') and filename.startswith(('001_', '002_', '003_')):
+            if migration_pattern.match(filename):
                 migration_files.append(filename[:-3]) # Remove .py extension
 
         migration_files.sort() # Ensure proper order
@@ -103,3 +106,25 @@ class MigrationManager:
         except Exception as e:
             self.logger.error(f"Could not load migration {migration_name}: {e}")
             return False
+    
+    def migrate(self):
+        """
+        Apply all pending migrations
+        """
+        pending = self.get_pending_migrations()
+
+        if not pending:
+            self.logger.info("No pending migrations")
+            return True
+        
+        self.logger.info(f"Applying {len(pending)} migrations...")
+
+        for migration_name in pending:
+            try:
+                self.apply_migration(migration_name)
+            except Exception as e:
+                self.logger.error(f"Migration failed, stopping: {e}")
+                return False
+        
+        self.logger.info("All migrations applied successfully")
+        return True
