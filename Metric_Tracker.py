@@ -385,14 +385,14 @@ class YouTubeMetricsTracker:
         
     def collect_video_metrics(self, channel_id):
         """
-        Collect metrics for top videos of a channel
+        Collect metrics for videos based on tracking strategy
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         # Check if we should track videos for this channel
         cursor.execute('''
-                       SELECT track_videos, max_videos_to_track
+                       SELECT track_videos, video_tracking_strategy, video_tracking_days, max_videos_to_track
                          FROM tracking_config
                         WHERE channel_id = ? AND active = 1
                        ''', (channel_id,))
@@ -402,7 +402,17 @@ class YouTubeMetricsTracker:
             conn.close()
             return
         
-        max_videos = config[1]
+        # Handle pre-migration databases
+        if len(config) >= 4:
+            track_videos, strategy, days, max_videos = config
+            strategy = strategy or 'recent_count'
+            days = days or 30
+            max_videos = max_videos or 50
+        else:
+            track_videos, max_videos = config[0], config[1]
+            strategy = 'recent_count'
+            days = 30
+
         conn.close()
 
         try:
@@ -412,6 +422,9 @@ class YouTubeMetricsTracker:
                 return
             
             uploads_playlist = channel_info['contentDetails']['relatedPlaylists']['uploads']
+            
+            # Fetch ALL recent videos from API (or a resonable number)
+            api_fetch_limit = max(max_videos, 50)
 
             # Get recent videos
             url = f"{self.base_url}/playlistItems"
@@ -419,7 +432,7 @@ class YouTubeMetricsTracker:
                 'key': self.api_key,
                 'playlistId': uploads_playlist,
                 'part': 'contentDetails',
-                'maxResults': max_videos
+                'maxResults': api_fetch_limit
             }
 
             response = requests.get(url, params = params)
@@ -430,8 +443,38 @@ class YouTubeMetricsTracker:
             
             video_ids = [item['contentDetails']['videoId'] for item in data['items']]
 
-            # Get detailed video info
+            # Get detailed video info for all fetched videos
             video_details = self.get_video_details(video_ids)
+
+            videos_to_store = []
+            cutoff_date = datetime.now() - timedelta(days = days)
+
+            if strategy == 'time_based':
+                # Store videos published within the time window
+                for video in video_details:
+                    published_str = video.get('snippet', {}).get('publishedAt', '')
+                    if published_str:
+                        published_date = datetime.fromisoformat(published_str.replace('Z', '+00:00'))
+                        if published_date >= cutoff_date:
+                            videos_to_store.append(video)
+
+            elif strategy == 'recent_count':
+                # Store only the N most recent videos
+                videos_to_store = video_details[:max_videos]
+
+            elif strategy == 'hybrid':
+                # Store videos within time window, capped at max count
+                for video in video_details:
+                    published_str = video.get('snippet', {}).get('publishedAt', '')
+                    if published_str:
+                        published_date = datetime.fromisoformat(published_str.replace('Z', '+00:00'))
+                        if published_date >= cutoff_date:
+                            videos_to_store.append(video)
+                            if len(videos_to_store) >= max_videos:
+                                break
+            else:
+                self.logger.warning(f"Invalid startegy '{strategy}', defaulting to recent_count")
+                videos_to_store = video_details[:max_videos]
 
             # Store video metrics
             conn = sqlite3.connect(self.db_path)
@@ -624,7 +667,7 @@ class YouTubeMetricsTracker:
                          FROM video_metrics vm
                          JOIN tracking_config tc ON vm.channel_id = tc.channel_id
                         WHERE tc.active = 1
-                             AND vm.timestamp >= datetime('now', '-' || ? || ' days')
+                             AND vm.published_at >= datetime('now', '-' || ? || ' days')
                         ORDER BY vm.timestamp DESC
                        ''', (days_back,))
         
@@ -633,7 +676,7 @@ class YouTubeMetricsTracker:
 
         self.logger.info(f"Collecting comments for {len(videos)} recent videos")
 
-        for video_id, title, channel_id in videos:
+        for video_id, title in videos:
             self.logger.info(f"Collecting comments for: {title}")
             self.get_video_comments(video_id, max_comments_per_video)
             time.sleep(1)
