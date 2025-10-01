@@ -10,7 +10,7 @@ def up(conn):
 
     if 'video_tracking_strategy' not in columns:
         cursor.execute('''
-            LTER TABLE tracking_config
+            ALTER TABLE tracking_config
             ADD COLUMN video_tracking_strategy TEXT DEFAULT 'time_based'
         ''')
     
@@ -23,7 +23,7 @@ def up(conn):
     cursor.execute('''
         UPDATE tracking_config
         SET video_tracking_strategy = 'time_based',
-           video_tracking_days = 30,
+           video_tracking_days = 30
         WHERE video_tracking_strategy IS NULL
         ''')
     

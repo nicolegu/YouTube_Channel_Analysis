@@ -95,7 +95,7 @@ class MigrationManager:
                 # Record failed migration
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSER INTO schema_migrations (migration_name, success) VALUES (?, 0)
+                    INSERT INTO schema_migrations (migration_name, success) VALUES (?, 0)
                 ''', (migration_name,))
                 conn.commit()
 
