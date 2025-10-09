@@ -1,72 +1,211 @@
+import sqlite3
 from nltk.stem import WordNetLemmatizer
 import re
 import emoji
 from datetime import datetime
 import logging
+from config import product_keywords, content_type, brands
 
-# Video classification by title
+class YouTubeDataProcessor:
+    """
+    Process and clean YouTube metrics data
+    """
 
-product_keywords = {
-    'stationery': ['stationery'],
-    'pens': ['pen', 'fountain pen', 'ballpoint pen', 'gel pen', 'multi pen', 'rollerball pen',
-             'brush pen', 'calligraphy pen', 'comic pen', 'manga pen', 'dip pen', 'marker',
-             'felt tip pen', 'highlighter', 'stylus pen'],
+    def __init__(self, db_path = 'youtube_metrics.db'):
+        self.db_path = db_path
+        self.setup_logging()
 
-    'refills_and_inks': ['refill', 'ink', 'fountain pen ink', 'drawing ink', 'calligraphy ink',
-                         'comic ink', 'dip pen ink', 'india ink', 'iron gall ink', 'shimmering ink',
-                         'waterproof ink', 'nib', 'converter', 'bottle', 'blade', 'replacement', 'tip',
-                         'inkwell', 'reservoir', 'cleaner', 'silicone grease', 'filler'],
+    def setup_logging(self):
+        logging.basicConfig(
+            level=logging.INFO,
+            format = '%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler('data_processor.log'),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
 
-    'pencils': ['pencil', 'mechanical pencil', 'drafting pencil', 'lead holder', 'lead pointer',
-                'wooden pencil', 'pencil lead', 'pencil cap', 'pencil grip', 'pencil sharpener',
-                'pencil holder', 'eraser'],
+    # ============ Data Cleaning ============
 
-    'paper': ['paper', 'notebook', 'notebook cover', 'binder', 'folder', 'planner', 'journal',
-              'sketchbook', 'sticky note', 'notepad', 'envelope', 'letter', 'flash card', 'index card',
-              'postcard', 'loose leaf paper', 'comic paper'],
+    def clean_all_data(self):
+        """
+        Run all data cleaning steps
+        """
+        self.logger.info('Starting data cleaning...')
 
-    'crafts': ['tape', 'glue', 'washi tape', 'tape runner', 'clear tape', 'stamp', 'stamp ink pad',
-               'stamp cleaner', 'sticker', 'transfer sticker', 'sealing wax', 'wax seal stamp',
-               'watercolor', 'acrylic', 'gouache', 'palette', 'coloring book', 'crayon', 'stencil', 'chalk',
-               'tape cutter'],
+        conn = sqlite3.connect(self.db_path)
 
-    'cases_and_bags': ['pencil case', 'pen case', 'bag', 'backpack', 'pouch', 'purse', 'case'],
+        try:
+            self.validate_raw_data(conn)
+            duplicates = self.remove_duplicate_collections(conn)
+            self.logger.info(f"Removed {duplicates} duplicate records")
 
-    'office_and_toys': ['bookmark', 'correction tape', 'correction pen', 'ruler', 'scissors', 'paper clip',
-                        'desk organizer', 'desk tray', 'stapler', 'keychain', 'plushie', 'binder divider']
-}
+            self.validate_metrics(conn)
+            self.clean_text_fields(conn)
 
-content_type = {
-    'tutorial': ['tutorial', 'how to', 'guide', 'tip', 'diy', 'trick', 'way'],
-    'review': ['review', 'unboxing'],
-    'haul': ['haul', 'budget'],
-    'showcase': ['collection', 'favorite', "what's in", 'techo kaigi'],
-    'event': ['event', 'livestream', 'party', 'pen show', 'workshop', 'pop up', 'fest']
-}
+            self.logger.info('Data cleaning completed!')
+            return True
+        
+        except Exception as e:
+            self.logger.error(f"Data cleaning failed: {e}")
+            return False
+        
+        finally:
+            conn.close()
 
-brands = {'paper': [
-              'Hobonichi', 'Kokuyo', 'Midori', "TRAVELER'S COMPANY", 'Maruman',
-              'Rhodia', 'Leuchtturm1917', 'Clairefontaine', 'Yamamoto', 'Stalogy',
-              'LIFE', 'Tomoe River'],
-          'fountain_pens': [
-              'Pilot', 'Sailor', 'Platinum', 'LAMY', 'Kaweco', 'Pelikan', 'TWSBI',
-              'Faber-Castell', 'Parker', 'BENU', 'Opus 88', 'Visconti'],
-          'ink': [
-              'Diamine', "Noodler's", 'Robert Oster', 'Herbin', 'Rohrer & Klingner',
-              'De Atramentis', 'Colorverse', 'Takeda Jimuki', 'Dominant', 'Nagasawa', 'Monteverde'],
-          'pencils_pens': [
-              'Uni', 'Pentel', 'Zebra', 'Tombow', 'Sakura', 'Copic', 'Stabilo'],
-          'art_supplies': [
-              'Staedtler', 'Kuretake', 'Blackwing', 'Speedball', "Caran d'Ache",
-              'Koh-I-Noor', 'Deleter', 'Tachikawa', 'Stillman & Birn', 'Winsor & Newton'],
-          'bags': ['Lihit Lab', 'Doughnut', 'Sun-Star'],
-          'featured_brands': [
-              'JetPens', 'Rotring', 'TOOLS to LIVEBY', 'Sanby', 'Hightide', "Mark's",
-              'Suatelier', 'Retro 51', 'BIGiDESIGN', 'Rickshaw', 'Kakimori', 'Field Notes'],
-          'new_retailers': [
-              'Green Flash', 'Sheaffer', 'Wearingeul', 'Cross', 'Clarto', 'Matsubokkuri',
-              'OLFA', 'Girologic', 'UGears', 'Journalize', 'Greeting Life', 'Writech']          
-}
+    def validate_raw_data(self, conn):
+        """
+        Check for missing critical fields
+        """
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT video_id, title, view_count, published_at
+              FROM video_metrics
+             WHERE title IS NULL OR title = ''
+                OR view_count IS NULL
+                OR published_at IS NULL OR published_at = ''
+        ''')
+
+        invalid_records_raw = cursor.fetchall()
+
+        if invalid_records_raw:
+            self.logger.warning(f"Found {len(invalid_records_raw)} records with missing data")
+            for record in invalid_records_raw:
+                self.logger.warning(f"Invalid record in raw data: {record}")
+
+    def remove_duplicate_collections(conn):
+        """
+        Remove duplicate metric snapshots collected at same time
+        """
+        cursor = conn.cursor()
+
+        # Keep only the latest entry per video per collection time
+        cursor.execute('''
+            DELETE FROM video_metrics
+             WHERE id NOT IN (
+                  SELECT MAX(id)
+                    FROM video_metrics
+                   GROUP BY video_id, datetime(timestamp, 'start of hour')
+            )
+        ''')
+
+        number_deleted = cursor.rowcount
+        conn.commit()
+        return number_deleted
+    
+    def validate_metrics(self, conn):
+        """
+        Check for impossible values
+        """
+        cursor = conn.cursor()
+
+        # Check negative counts
+        cursor.execute('''
+            SELECT video_id, view_count, like_count, comment_count
+              FROM video_metrics
+             WHERE view_count < 0
+                  OR like_count < 0
+                  OR comment_count < 0
+        ''')
+
+        invalid_records_metrics = cursor.fetchall()
+
+        if invalid_records_metrics:
+            self.logger.warning(f"Found {len(invalid_records_metrics)} records with negative metrics")
+
+        # Check impossible ratios (likes > views)
+        cursor.execute('''
+            SELECT video_id, view_count, like_count
+              FROM video_metrics
+             WHERE like_count > view_count
+        ''')
+
+        conflicts = cursor.fetchall()
+
+        if conflicts:
+            self.logger.warning(f"Found {len(conflicts)} records where likes > views")
+
+    def clean_text_fields(self, conn):
+        """
+        Fix encoding issues in titles and comments
+        """
+        cursor = conn.cursor()
+        
+        # Clean video titles
+        cursor.execute('SELECT video_id, title FROM video_metrics WHERE title is NOT NULL')
+        
+        updates = 0
+        for video_id, title in cursor.fetchall():
+            cleaned = title.encode('utf-8', errors = 'ignore').decode('utf-8').strip()
+
+            if cleaned != title:
+                cursor.execute(
+                    'UPDATE video_metrics SET title = ? WHERE video_id = ?',
+                    (cleaned, video_id)
+                )
+                updates += 1
+        
+        # Clean comments
+        cursor.execute('SELECT comment_id, comment_text FROM comments WHERE comment_text is NOT NULL')
+
+        for comment_id, text in cursor.fetchall():
+            cleaned = text.encode('utf-8', errors = 'ignore').decode('utf-8')
+
+            if cleaned != text:
+                cursor.execute(
+                    'UPDATE comments SET comment_text = ? WHERE comment_id = ?',
+                    (cleaned, comment_id)
+                )
+                updates += 1
+        
+        if updates > 0:
+            self.logger.info(f"Cleaned {updates} text fields")
+            conn.commit()
+
+    # ============ VIDEO PROCESSING ============
+
+    def process_all_videos(self):
+        """
+        Process all unprocessed video
+        """
+        self.logger.info('Starting video processing...')
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            # Get videos that haven't been processed yet
+            cursor.execute('''
+                SELECT vm.video_id, vm.channel_id, vm.title, vm.duration, vm.published_at
+                  FROM video_metrics vm
+                  LEFT JOIN processed_videos pv
+                    ON vm.video_id = pv.video_id
+                 WHERE pv.video_id IS NULL
+                 GROUP BY vm.video_id
+            ''')
+
+            videos = cursor.fetchall()
+            self.logger.info(f"Processing {len(videos)} new videos")
+
+            for video_id, channel_id, title, duration, published_at in videos:
+                try:
+                    self.process_single_videos(
+                        conn, video_id, channel_id, title, duration, published_at
+                    )
+                except Exception as e:
+                    self.logger.error(f"Failed to process video {video_id}: {e}")
+            
+            conn.commit()
+            self.logger.info("Video processing completed")
+
+        except Exception as e:
+            self.logger.error(f"Video processing failed: {e}")
+            conn.rollback()
+
+        finally:
+            conn.close()
 
 def preprocess_title(title):
     """
@@ -198,25 +337,7 @@ def validate_raw_data(conn):
         logging.warning(f"Found {len(invalid_records)}")
 
 
-def remove_duplicate_collections(conn):
-    """
-    Remove duplicate metric snapshots collected at same time
-    """
-    cursor = conn.cursor()
 
-    # Keep only the latest entry per video per collection time
-    cursor.execute('''
-       DELETE FROM video_metrics
-        WHERE id NOT IN (
-            SELECT MAX(id)
-              FROM video_metrics
-             GROUP BY video_id, datetime(timestamp, 'start of hour')
-        )
-    ''')
-
-    number_deleted = cursor.rowcount
-    conn.commit()
-    return number_deleted
 
 def validate_metrics(conn):
     """
@@ -250,9 +371,41 @@ def validate_metrics(conn):
     if conflict_records:
         logging.warning(f"Found {len(conflict_records)} records with conflict metrics")
 
+def clean_text_fields(conn):
+    """
+    Fix encoding issues in titles and comments
+    """
+    cursor = conn.cursor()
 
+    cursor.execute('SELECT video_id, title FROM video_metrics')
 
+    video_titles = cursor.fetchall()
 
+    for video_id, title in video_titles:
+        if title:
+            cleaned = title.encode('utf-8', errors = 'ignore').decode('utf-8')
+
+            if cleaned != title:
+                cursor.execute(
+                    'UPDATE video_metrics SET title = ? WHERE video_id = ?',
+                    (cleaned, video_id)
+                )
+
+    cursor.execute('SELECT comment_id, comment_text FROM comments')
+
+    comment_texts = cursor.fetchall()
+
+    for comment_id, comment in comment_texts:
+        if comment:
+            cleaned = comment.encode('utf-8', errors = 'ignore').decode('utf-8')
+
+            if cleaned != comment:
+                cursor.execute(
+                    'UPDATE comments SET comment_text = ? WHERE comment_id = ?',
+                    (cleaned, comment_id)
+                )
+
+    conn.commit()
 
 
 
