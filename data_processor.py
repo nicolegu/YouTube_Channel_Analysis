@@ -4,7 +4,9 @@ import re
 import emoji
 from datetime import datetime
 import logging
-from config import product_keywords, content_type, brands
+import isodate
+import json
+from config import product_keywords, content_types, brands
 
 class YouTubeDataProcessor:
     """
@@ -207,205 +209,216 @@ class YouTubeDataProcessor:
         finally:
             conn.close()
 
-def preprocess_title(title):
-    """
-    Extract useful info from title with emoji handling
-    """
+    def process_single_videos(self, conn, video_id, channel_id, title, duration, published_at):
+        """
+        Process a single video and store results
+        """
+        cursor = conn.cursor()
 
-    title_no_emoji = emoji.replace_emoji(title, replace = '')
+        # Clean title and extract emojis
+        processed = self.preprocess_title(title)
 
-    title_cleaned = re.sub(r'[^a-zA-Z0-9\s]', '', title_no_emoji)
+        # Categorize
+        categories = self.categorize_video(processed['title_clean'])
 
-    emojis_found = emoji.emoji_list(title)
+        # Extract brands
+        brands_found = self.extract_brands_from_title(title)
 
-    return {
-        'title_clean': title_cleaned.strip(),
-        'emojis': [e['emoji'] for e in emojis_found]
-    }
+        # Convert duration
+        duration_seconds = self.parse_duration(duration) if duration else None
 
-def extract_brands_from_title(title):
-    """
-    Extract mentioned brands from video title
-    """
-    title_lower = title.lower()
-    brands_found = []
+        # Extract temporal features
+        publish_day = self.get_publish_day_of_week(published_at)
+        publish_hour = self.get_publish_hour(published_at)
 
-    for category, brands in brands.items():
-        for brand in brands:
-            # Check for brand mention (case-insensitive)
-            if brand.lower() in title_lower:
-                brands_found.append({
-                    'brand': brand,
-                    'category': category
-                })
-
-    return brands_found
-
-def categorize_video(title):
-    wnl = WordNetLemmatizer()
-    title_lower = title.lower()
-    words_in_title = title_lower.split()
-    words_in_title = [wnl.lemmatize(word) for word in words_in_title]
-    title_cleaned = ' '.join(words_in_title)
-    products = []
-    content_types = []
-
-    for category, keywords in product_keywords.items():
-        if any(keyword in title_cleaned for keyword in keywords):
-            products.append(category)
-
-    for category, keywords in content_type.items():
-        if any(keyword in title_cleaned for keyword in keywords):
-            content_types.append(category)
-
-    return {'products': products, 'content_types': content_types,
-            'words_in_title': words_in_title, 'title_cleaned': title_cleaned}
-
-
-a = preprocess_title('Why Your Planner is Failing You 💔📓 + How to Fix it!')
-print(a)
-
-categories = categorize_video(a['title_clean'])
-print(categories)
-
-
-# Transfrom duration
-
-def video_duration(duration):
-    """
-    Convert video length into seconds
-    """
-    duration = duration[2:] # Remove 'PT'
-    time = ''
-    total = 0
-    for char in duration:
-
-        if char == 'H':
-            total += int(time) * 60 * 60
-            time = ''
-        elif char == 'M':
-            total += int(time) * 60
-            time = ''
-        elif char == 'S':
-            total += int(time)
-        else:
-            time += char
+        # Store processed data
+        cursor.execute('''
+            INSERT OR REPLACE INTO processed_videos
+            (video_id, channel_id, title_cleaned, duration_seconds,
+             product_categories, content_types, brands_mentioned, emojis,
+             publish_day_of_week, publish_hour, last_processed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            video_id,
+            channel_id,
+            processed['title_clean'],
+            duration_seconds,
+            json.dumps(categories['products']),
+            json.dumps(categories['content_type']),
+            json.dumps(brands_found),
+            json.dumps(processed['emojis']),
+            publish_day,
+            publish_hour,
+            datetime.now()
+        ))
     
-    return total
+    # ============ TEXT PROCESSING HELPERS ============
 
-print(video_duration('PT14M44S'))
+    def preprocess_title(self, title):
+        """
+        Extract useful info from title with emoji handling
+        """
+        if not title:
+            return {'title_clean': '', 'emojis': []}
 
+        title_no_emoji = emoji.replace_emoji(title, replace = '')
+        title_cleaned = re.sub(r'[^a-zA-Z0-9\s]', '', title_no_emoji)
+        emojis_found = emoji.emoji_list(title)
 
-# Get day of week for publication date
-def get_publish_day_of_week(published_at):
-    """
-    Extract day of week from publish date
-    """
-    publish_day = published_at[:11]
-    day_obj = datetime.strptime(publish_day, '%Y-%m-%d')
-    day_of_week = day_obj.strftime('%A')
+        return {
+            'title_clean': title_cleaned.strip(),
+            'emojis': [e['emoji'] for e in emojis_found]
+        }
+    
+    def categorize_video(self, title):
+        """
+        Categorize video by product type and content type
+        """
+        if not title:
+            return {'products': [], 'content_types': []}
+        
+        wnl = WordNetLemmatizer()
+        title_lower = title.lower()
+        words_in_title = title_lower.split()
+        words_in_title = [wnl.lemmatize(word) for word in words_in_title]
+        title_cleaned = ' '.join(words_in_title)
+        products = []
+        content_types = []
+        
+        # Check product categories
+        for category, keywords in product_keywords.items():
+            if any(keyword in title_cleaned for keyword in keywords):
+                products.append(category)
+        
+        # Check content types
+        for category, keywords in content_types.items():
+            if any(keyword in title_cleaned for keyword in keywords):
+                content_types.append(category)
 
-    return day_of_week
+        return {'products': products, 'content_types': content_types}
+    
+    def extract_brands_from_title(self, title):
+        """
+        Extract mentioned brands from video title
+        """
+        if not title:
+            return []
+        
+        title_lower = title.lower()
+        brands_found = []
 
-def get_publish_hour(published_at):
-    """
-    Extract hour from publish date
-    """
-    publish_hour = published_at[12:14]
+        for category, brand_list in brands.items():
+            for brand in brand_list:
+            # Check for brand mention (case-insensitive)
+                if brand.lower() in title_lower:
+                    brands_found.append({
+                        'brand': brand,
+                        'category': category
+                    })
 
-    return int(publish_hour)
+        return brands_found
 
+    # Transfrom duration
+    def parse_duration(self, duration):
+        """
+        Convert ISO 8601 duration to seconds
+        """
+        try:
+            return int(isodate.parse_duration(duration).total_seconds())
+        except:
+            self.logger.warning(f"Failed to parse duration: {duration}")
+            return None
+        
+    # Get day of week for publication date
+    def get_publish_day_of_week(self, published_at):
+        """
+        Extract day of week from publish date
+        """
+        try:
+            dt = datetime.fromisoformat(published_at.replace('Z', '+00:00'))
+            return dt.strftime('%A')
+        except:
+            self.logger.warning(f"Failed to parse date: {published_at}")
+            return None
 
-def validate_raw_data(conn):
-    """
-    Check for and handle missing critical fields
-    """
-    cursor = conn.cursor()
+    def get_publish_hour(published_at):
+        """
+        Extract hour from publish date
+        """
+        try:
+            dt = datetime.fromisoformat(published_at.replace('Z', '+00:00'))
+            return dt.hour
+        except:
+            return None
 
-    # Find videos with missing essential data
-    cursor.execute('''
-      SELECT video_id, title, view_count, published_at
-        FROM video_metrics
-       WHERE title IS NULL
-          OR view_count IS NULL
-          OR published_at IS NULL
-    ''')
+# ============ ENGAGEMENT METRICS ============
 
-    invalid_records = cursor.fetchall()
+    def calculate_engagement_metrics(self):
+        """
+        Calculate engagement metrics for all videos
+        """
+        self.logger.info('Calculating engagement metrics...')
 
-    if invalid_records:
-        logging.warning(f"Found {len(invalid_records)}")
-
-
-
-
-def validate_metrics(conn):
-    """
-    Check for impossible values
-    """
-    cursor = conn.cursor()
-
-    # Negative counts shouldn't exist
-    cursor.execute('''
-        SELECT video_id, view_count, like_count, comment_count
-          FROM video_metrics
-         WHERE view_count < 0
-              OR like_count < 0
-              OR comment_count < 0
-    ''')
-
-    invalid_records = cursor.fetchall()
-
-    if invalid_records:
-        logging.warning(f"Found {len(invalid_records)} records with negative metrics")
-
-    # Likes/comments can't exceed views (theoretically)
-    cursor.execute('''
-        SELECT video_id, view_count, like_count
-          FROM video_metrics
-         WHERE like_count > view_count
-    ''')
-
-    conflict_records = cursor.fetchall()
-
-    if conflict_records:
-        logging.warning(f"Found {len(conflict_records)} records with conflict metrics")
-
-def clean_text_fields(conn):
-    """
-    Fix encoding issues in titles and comments
-    """
-    cursor = conn.cursor()
-
-    cursor.execute('SELECT video_id, title FROM video_metrics')
-
-    video_titles = cursor.fetchall()
-
-    for video_id, title in video_titles:
-        if title:
-            cleaned = title.encode('utf-8', errors = 'ignore').decode('utf-8')
-
-            if cleaned != title:
-                cursor.execute(
-                    'UPDATE video_metrics SET title = ? WHERE video_id = ?',
-                    (cleaned, video_id)
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+    
+        try:
+            # Get latest metrics for each video
+            cursor.execute('''
+                SELECT video_id, view_count, like_count, comment_count, timestamp
+                  FROM video_metrics
+                 WHERE id IN (
+                     SELECT MAX(id)
+                       FROM video_metrics
+                      GROUP BY video_id
                 )
+            ''')
 
-    cursor.execute('SELECT comment_id, comment_text FROM comments')
+            for video_id, views, likes, comments, timestamp in cursor.fetchall():
+                if views > 0:
+                    engagement_rate = (likes + comments) / views
+                    like_rate = likes / views
+                    comment_rate = comments / views
 
-    comment_texts = cursor.fetchall()
+                    cursor.execute('''
+                        INSERT INTO video_engagement_metrics
+                        (video_id, timestamp, engagement_rate, like_rate, comment_rate)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (video_id, timestamp, engagement_rate, like_rate, comment_rate))
 
-    for comment_id, comment in comment_texts:
-        if comment:
-            cleaned = comment.encode('utf-8', errors = 'ignore').decode('utf-8')
+            conn.commit()
+            self.logger.info("Engagement metrics calculated")
+    
+        except Exception as e:
+            self.logger.error(f"Failed to calculate engagement metrics: {e}")
+            conn.rollback()
+    
+        finally:
+            conn.close()
 
-            if cleaned != comment:
-                cursor.execute(
-                    'UPDATE comments SET comment_text = ? WHERE comment_id = ?',
-                    (cleaned, comment_id)
-                )
+# ============ MAIN PROCESSING PIPELINE ============
 
-    conn.commit()
+    def run_full_pipeline(self):
+        """
+        Run complete data processing pipeline
+        """
+        self.logger.info('=' * 50)
+        self.logger.info('Starting full data processing pipeline')
+        self.logger.info('=' * 50)
+
+        # Step 1: Clean data
+        if not self.clean_all_data():
+            self.logger.error('Data cleaning failed, stopping pipeline')
+            return False
+        
+        # Step 2: Process videos
+        self.process_all_videos()
+
+        # Step 3: Calculate metrics
+        self.calculate_engagement_metrics()
+
+        self.logger.info('Pipeline completed successfully')
+        return True
 
 
 

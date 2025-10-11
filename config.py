@@ -29,7 +29,7 @@ product_keywords = {
                         'desk organizer', 'desk tray', 'stapler', 'keychain', 'plushie', 'binder divider']
 }
 
-content_type = {
+content_types = {
     'tutorial': ['tutorial', 'how to', 'guide', 'tip', 'diy', 'trick', 'way'],
     'review': ['review', 'unboxing'],
     'haul': ['haul', 'budget'],
