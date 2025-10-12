@@ -77,7 +77,7 @@ class YouTubeDataProcessor:
             for record in invalid_records_raw:
                 self.logger.warning(f"Invalid record in raw data: {record}")
 
-    def remove_duplicate_collections(conn):
+    def remove_duplicate_collections(self, conn):
         """
         Remove duplicate metric snapshots collected at same time
         """
@@ -244,7 +244,7 @@ class YouTubeDataProcessor:
             processed['title_clean'],
             duration_seconds,
             json.dumps(categories['products']),
-            json.dumps(categories['content_type']),
+            json.dumps(categories['content_types']),
             json.dumps(brands_found),
             json.dumps(processed['emojis']),
             publish_day,
@@ -283,7 +283,7 @@ class YouTubeDataProcessor:
         words_in_title = [wnl.lemmatize(word) for word in words_in_title]
         title_cleaned = ' '.join(words_in_title)
         products = []
-        content_types = []
+        found_content_types = []
         
         # Check product categories
         for category, keywords in product_keywords.items():
@@ -293,9 +293,9 @@ class YouTubeDataProcessor:
         # Check content types
         for category, keywords in content_types.items():
             if any(keyword in title_cleaned for keyword in keywords):
-                content_types.append(category)
+                found_content_types.append(category)
 
-        return {'products': products, 'content_types': content_types}
+        return {'products': products, 'content_types': found_content_types}
     
     def extract_brands_from_title(self, title):
         """
@@ -341,7 +341,7 @@ class YouTubeDataProcessor:
             self.logger.warning(f"Failed to parse date: {published_at}")
             return None
 
-    def get_publish_hour(published_at):
+    def get_publish_hour(self, published_at):
         """
         Extract hour from publish date
         """
