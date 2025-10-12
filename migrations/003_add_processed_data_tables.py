@@ -14,6 +14,8 @@ def up(conn):
             content_types TEXT,
             brands_mentioned TEXT,
             emojis TEXT,
+            publish_day_of_week TEXT,
+            publish_hour INTEGER,
             last_processed DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (video_id) REFERENCES video_metrics(video_id)
         )
@@ -25,7 +27,8 @@ def up(conn):
             video_id TEXT NOT NULL,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             engagement_rate REAL,
-            views_since_last_check INTEGER,
+            like_rate REAL,
+            comment_rate REAL,
             FOREIGN KEY (video_id) REFERENCES video_metrics(video_id)
         )
     ''')
