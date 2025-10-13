@@ -367,11 +367,7 @@ class YouTubeDataProcessor:
             cursor.execute('''
                 SELECT video_id, view_count, like_count, comment_count, timestamp
                   FROM video_metrics
-                 WHERE id IN (
-                     SELECT MAX(id)
-                       FROM video_metrics
-                      GROUP BY video_id
-                )
+                 WHERE view_count > 0
             ''')
 
             for video_id, views, likes, comments, timestamp in cursor.fetchall():
@@ -379,12 +375,19 @@ class YouTubeDataProcessor:
                     engagement_rate = (likes + comments) / views
                     like_rate = likes / views
                     comment_rate = comments / views
-
+                    
+                    # Check if this snapshot already exists
                     cursor.execute('''
-                        INSERT INTO video_engagement_metrics
-                        (video_id, timestamp, engagement_rate, like_rate, comment_rate)
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (video_id, timestamp, engagement_rate, like_rate, comment_rate))
+                        SELECT id FROM video_engagement_metrics
+                         WHERE video_id = ? AND timestamp = ?
+                    ''', (video_id, timestamp))
+
+                    if not cursor.fetchone(): # Only insert if not already stored
+                        cursor.execute('''
+                            INSERT INTO video_engagement_metrics
+                            (video_id, timestamp, engagement_rate, like_rate, comment_rate)
+                            VALUES (?, ?, ?, ?, ?)
+                        ''', (video_id, timestamp, engagement_rate, like_rate, comment_rate))
 
             conn.commit()
             self.logger.info("Engagement metrics calculated")
