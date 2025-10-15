@@ -8,6 +8,11 @@ from datetime import datetime, timedelta
 db_path = 'youtube_metrics.db'
 conn = sqlite3.connect(db_path)
 
+query = 'SELECT DISTINCT channel_id, channel_name FROM tracking_config WHERE active = 1'
+channel_mapping = pd.read_sql_query(query, conn).set_index('channel_name')['channel_id'].to_dict()
+
+available_channels = list(channel_mapping.keys())
+
 st.set_page_config(page_title='Stationery Channel Analytics', layout='wide')
 
 st.title('YouTube Channel Analytics Dashboard')
@@ -23,18 +28,19 @@ COLORS = {
 # Sidebar for channel selection
 with st.sidebar:
     st.header('Filters')
-    channels = st.multiselect(
+    selected_channel_names = st.multiselect(
         'Select channels:',
-        ['Jetpens', 'Yoseka Stationary'],
-        default = ['Jetpens']
+        available_channels
     )
 
-if not channels:
+
+if not selected_channel_names:
     st.warning('Please select at least one channel')
     st.stop()
 
 # Convert to SQL format
-channel_list = "'" + "','".join(channels) + "'"
+selected_channel_ids = [channel_mapping[name] for name in selected_channel_names]
+channel_id_list = "'" + "','".join(selected_channel_ids) + "'"
 
 # ============ ROW 1: Daily Engagement Trend ============
 st.subheader('Daily Engagement Trend')
@@ -42,9 +48,9 @@ st.subheader('Daily Engagement Trend')
 query = """
     SELECT DATE(vem.timestamp) AS date, AVG(vem.engagement_rate) AS avg_engagement
       FROM video_engagement_metrics vem
-      JOIN tracking_config tc
-        ON vem.channel_id = tc.channel_id
-     WHERE tc.channel_name IN ({channel_list})
+      JOIN processed_videos pv
+        ON vem.video_id = pv.video_id
+     WHERE pv.channel_id IN ({channel_id_list})
      GROUP BY DATE(vem.timestamp)
      ORDER BY DATE(vem.timestamp)
 """
@@ -60,51 +66,96 @@ if not df_trend.empty:
         labels = {'date': 'Date',
                   'avg_engagement': 'Avg Engagement Rate'}
     )
+    # Modify properties of figure's layout (titles, legends, etc.)
     fig.update_layout(
         hovermode = 'x unified',
         height = 400,
         showlegend = False
     )
     st.plotly_chart(fig, use_container_width = True)
+else:
+    st.info('No engagement data available for selected channels')
 
+# ============ ROW 2: Top Videos & Engagement by Brand ============
+col1, col2 = st.columns([1, 1])
 
-# Top 10 videos
-st.subheader('Top Performing Videos')
-top_videos = pd.read_sql_query("""
-    SELECT title, engagement_rate, view_count
-      FROM processed_videos pv
-      JOIN video_engagement_metrics vem
-        ON pv.video_id = vem.video_id
-     ORDER BY engagement_rate DESC
-     LIMIT 10
-""", conn)
-st.dataframe(top_videos)
+with col1:
+    st.subheader('Top Performing Videos')
+    query = """
+        SELECT title, engagement_rate, view_count
+          FROM processed_videos pv
+          JOIN video_engagement_metrics vem
+            ON pv.video_id = vem.video_id
+         WHERE pv.channel_id IN ({channel_id_list})
+              AND vem.id IN (
+                  SELECT MAX(id) FROM video_engagement_metrics
+                   WHERE video_id IN (SELECT video_id FROM processed_videos WHERE channel_id IN ({channel_id_list}))
+                   GROUP BY video_id
+              )
+         ORDER BY vem.engagement_rate DESC
+         LIMIT 10
+"""
+    top_videos = pd.read_sql_query(query, conn)
 
+    if not top_videos.empty:
+        top_videos['engagement_rate'] = (top_videos['engagement_rate'] * 100).round(2)
+        st.dataframe(
+            top_videos.rename(columns={
+                'title': 'Title',
+                'engagement_rate': 'Engagement %',
+                'view_count': 'Views'
+            }),
+           use_container_width = True,
+           height = 400
+        )
+    else:
+        st.info('No video data available')
+
+with col2:
 # Engagement by brands mentioned (bar chart)
-st.subheader('Engagement by Brand')
-query = """
-    SELECT pv.video_id, pv.brands_mentioned, vem.engagement_rate
-      FROM processed_videos pv
-      LEFT JOIN video_engagement_metrics vem
-        ON pv.video_id = vem.video_id
-     WHERE vem.id IN (
-         SELECT MAX(id) FROM video_engagement_metrics GROUP BY video_id
+    st.subheader('Engagement by Brand')
+    query = f"""
+        SELECT pv.video_id, pv.brands_mentioned, vem.engagement_rate
+          FROM processed_videos pv
+          LEFT JOIN video_engagement_metrics vem
+            ON pv.video_id = vem.video_id
+         WHERE pv.channel_id IN ({channel_id_list})
+              AND vem.id IN (
+                  SELECT MAX(id) FROM video_engagement_metrics
+                   WHERE video_id IN (SELECT video_id FROM processed_videos WHERE channel_id IN ({channel_id_list}))
+                  GROUP BY video_id
      )
 """
 
-df = pd.read_sql_query(query, conn)
+df_brands = pd.read_sql_query(query, conn)
 
 # Parse brands
 brands_list = []
-for idx, row in df.iterrows():
+for idx, row in df_brands.iterrows():
     if row['brands_mentioned']:
         brands = json.loads(row['brands_mentioned'])
         for brand_obj in brands:
             brands_list.append({
                 'brand': brand_obj['brand'],
-                'category': brand_obj['category'],
                 'engagement_rate': row['engagement_rate']
             })
+
+if brands_list:
+    brands_df = pd.DataFrame(brands_list)
+    brand_engagement = brands_df.groupby('brand')['engagement_rate'].median().sort_values(ascending=False).head(10)
+
+    fig = px.bar(
+        x = brand_engagement.values,
+        y = brand_engagement.index,
+        orientation='h',
+        color_discrete_sequence=[COLORS['accent']],
+        labels = {'x': 'Median Engagement Rate', 'y': 'Brand'}
+    )
+    fig.update_layout(height = 400, showlegend = False)
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info('No brand data available')
+
 
 brands_df = pd.DataFrame(brands_list)
 
