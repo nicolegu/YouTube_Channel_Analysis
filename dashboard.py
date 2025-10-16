@@ -133,16 +133,22 @@ df_brands = pd.read_sql_query(query, conn)
 brands_list = []
 for idx, row in df_brands.iterrows():
     if row['brands_mentioned']:
-        brands = json.loads(row['brands_mentioned'])
-        for brand_obj in brands:
-            brands_list.append({
-                'brand': brand_obj['brand'],
-                'engagement_rate': row['engagement_rate']
-            })
+        try:
+            brands = json.loads(row['brands_mentioned'])
+            for brand_obj in brands:
+                brands_list.append({
+                    'brand': brand_obj['brand'],
+                    'engagement_rate': row['engagement_rate']
+                })
+        except json.JSONDecodeError:
+            continue
 
 if brands_list:
     brands_df = pd.DataFrame(brands_list)
     brand_engagement = brands_df.groupby('brand')['engagement_rate'].median().sort_values(ascending=False).head(10)
+    brand_counts = brands_df.groupby('brand').size()
+    brands_with_enough_data = brand_engagement[brand_counts >= 3].index
+    brand_engagement_filtered = brand_engagement[brand_engagement.index.isin(brands_with_enough_data)]
 
     fig = px.bar(
         x = brand_engagement.values,
@@ -153,34 +159,52 @@ if brands_list:
     )
     fig.update_layout(height = 400, showlegend = False)
     st.plotly_chart(fig, use_container_width=True)
+    st.info(f'Showing {len(brand_engagement_filtered)} brands with 3+ mentions')
 else:
     st.info('No brand data available')
 
+# ============ ROW 3: Product Categories ============
 
-brands_df = pd.DataFrame(brands_list)
-
-# Aggregate by brand
-brand_engagement = brands_df.groupby('brand')['engagement_rate'].median().sort_values(ascending=False)
-
-# Bar chart
-st.bar_chart(brand_engagement)
-
-# Product category bar chart
-st.subheader('Product Pie Chart')
-query = """
+st.subheader('Product Categories Coverage')
+query = f"""
     SELECT video_id, product_categories
       FROM processed_videos
+     WHERE channel_id IN ({channel_id_list})
 """
 
-df = pd.read_sql_query(query, conn)
+df_products = pd.read_sql_query(query, conn)
 
 # Parse products
 product_category_list = {}
-for idx, row in df.iterrows():
+for idx, row in df_products.iterrows():
     if row['product_categories']:
-        product_categories = json.loads(row['product_categories'])
-        for cat in product_categories:
-            product_category_list[cat] = product_category_list.get(cat, 0) + 1
+        try:
+            product_categories = json.loads(row['product_categories'])
+            for cat in product_categories:
+                product_category_list[cat] = product_category_list.get(cat, 0) + 1
+        except json.JSONDecodeError:
+            continue
 
-st.bar_chart(pd.Series(product_category_list))
+if product_category_list:
+    category_series = pd.Series(product_category_list).sort_values(ascending = True)
+
+    # Control how colors are used repetitively explicitly
+    # colors_gradient = [COLORS['success'], COLORS['info'], COLORS['accent']] * (len(category_series) // 3 + 1)
+    # colors_gradient = colors_gradient[:len(category_series)]
+
+    fig = px.bar(
+        y = category_series.index,
+        x = category_series.values,
+        orientation = 'h',
+        color_discrete_sequence = [COLORS['success']],
+        labels = {'x': 'Number of Videos', 'y': 'Product Category'}
+    )
+    fig.update_layout(height = 350, showlegend = False)
+    st.plotly_chart(fig, use_container_width = True)
+
+else:
+    st.info('No product category data available')
+
+conn.close()
+
 
