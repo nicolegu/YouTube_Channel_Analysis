@@ -45,13 +45,17 @@ channel_id_list = "'" + "','".join(selected_channel_ids) + "'"
 # ============ ROW 1: Daily Engagement Trend ============
 st.subheader('Daily Engagement Trend')
 
-query = """
-    SELECT DATE(vem.timestamp) AS date, AVG(vem.engagement_rate) AS avg_engagement
+query = f"""
+    SELECT DATE(vem.timestamp) AS date,
+           tc.channel_name,
+           AVG(vem.engagement_rate) AS avg_engagement
       FROM video_engagement_metrics vem
       JOIN processed_videos pv
         ON vem.video_id = pv.video_id
+      JOIN tracking_config tc
+        ON pv.channel_id = tc.channel_id
      WHERE pv.channel_id IN ({channel_id_list})
-     GROUP BY DATE(vem.timestamp)
+     GROUP BY DATE(vem.timestamp), tc.channel_name
      ORDER BY DATE(vem.timestamp)
 """
 df_trend = pd.read_sql_query(query, conn)
@@ -61,16 +65,23 @@ if not df_trend.empty:
         df_trend,
         x = 'date',
         y = 'avg_engagement',
+        color = 'channel_name',
         markers = True,
-        color_discrete_sequence = [COLORS['info']],
         labels = {'date': 'Date',
-                  'avg_engagement': 'Avg Engagement Rate'}
+                  'avg_engagement': 'Avg Engagement Rate',
+                  'channel': 'Channel'}
     )
     # Modify properties of figure's layout (titles, legends, etc.)
     fig.update_layout(
         hovermode = 'x unified',
         height = 400,
-        showlegend = False
+        legend = dict(
+            orientation = 'h',
+            yanchor = 'bottom',
+            y = 1.02,
+            xanchor = 'right',
+            x = 1
+        )
     )
     st.plotly_chart(fig, use_container_width = True)
 else:
@@ -81,9 +92,19 @@ col1, col2 = st.columns([1, 1])
 
 with col1:
     st.subheader('Top Performing Videos')
-    query = """
-        SELECT title, engagement_rate, view_count
-          FROM processed_videos pv
+    query = f"""
+        WITH latest_metrics AS (
+            SELECT video_id, MAX(id) AS max_id
+              FROM video_metrics
+             GROUP BY video_id
+        )
+        SELECT vm.title, vem.engagement_rate, vm.view_count
+          FROM video_metrics vm
+          JOIN latest_metrics lm
+            ON vm.video_id = lm.video_id
+              AND vm.id = lm.max_id
+          JOIN processed_videos pv
+            ON vm.video_id = pv.video_id
           JOIN video_engagement_metrics vem
             ON pv.video_id = vem.video_id
          WHERE pv.channel_id IN ({channel_id_list})
@@ -106,7 +127,8 @@ with col1:
                 'view_count': 'Views'
             }),
            use_container_width = True,
-           height = 400
+           height = 400,
+           hide_index=True
         )
     else:
         st.info('No video data available')
@@ -157,7 +179,8 @@ if brands_list:
         color_discrete_sequence=[COLORS['accent']],
         labels = {'x': 'Median Engagement Rate', 'y': 'Brand'}
     )
-    fig.update_layout(height = 400, showlegend = False)
+    fig.update_layout(height = 400, showlegend = False,
+                      margin = dict(l=0, t=0, b=0)) # l: left, t: top, b: bottom
     st.plotly_chart(fig, use_container_width=True)
     st.info(f'Showing {len(brand_engagement_filtered)} brands with 3+ mentions')
 else:
