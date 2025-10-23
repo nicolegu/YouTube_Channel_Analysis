@@ -6,7 +6,7 @@ from datetime import datetime
 import logging
 import isodate
 import json
-from config import product_keywords, content_types, brands
+from config import product_keywords, content_types, brands, positive_words, negative_words, purchase_intent
 
 class YouTubeDataProcessor:
     """
@@ -251,6 +251,68 @@ class YouTubeDataProcessor:
             publish_hour,
             datetime.now()
         ))
+
+    # ============ COMMENT PROCESSING ============
+    def process_all_comments(self):
+        """
+        Process all unprocessed comments
+        """
+        self.logger.info('Start comment processing...')
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            # Get comments that haven't been processed
+            cursor.execute('''
+               SELECT comment_id, video_id, comment_text
+                 FROM comments
+                WHERE sentiment IS NULL
+            ''')
+
+            comments = cursor.fetchall()
+            self.logger.info(f"Processing {len(comments)} new videos")
+
+            for comment_id, video_id, comment_text in comments:
+                try:
+                    self.process_single_comment(
+                        conn, comment_id, video_id, comment_text
+                    )
+                except Exception as e:
+                    self.logger.error(f"Failed to process video {comment_id}: {e}")
+            
+            conn.commit()
+            self.logger.info("Comment processing completed")
+
+        except Exception as e:
+            self.logger.error(f"Comment processing failed: {e}")
+            conn.rollback()
+
+        finally:
+            conn.close()
+
+
+    def process_single_comment(self, conn, comment_id, video_id, comment_text):
+        """
+        Process a single comment and store results
+        """
+        cursor = conn.cursor()
+        
+        # Get results of comment analysis
+        results = self.analyze_comment_sentiment(comment_text)
+        
+        # Store results
+        cursor.execute('''
+            INSERT OR REPLACE INTO comments
+            (comment_id, video_id, sentiment, purchase_intent, is_question)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (comment_id,
+              video_id,
+              results['sentiment'],
+              results['purchase_intent'],
+              results['is_question']
+        ))
+
     
     # ============ TEXT PROCESSING HELPERS ============
 
@@ -350,6 +412,34 @@ class YouTubeDataProcessor:
             return dt.hour
         except:
             return None
+        
+    def analyze_comment_sentiment(self, comment_text):
+        """
+        Simple rule-based sentiment
+        """
+        comment_no_emoji = emoji.replace_emoji(comment_text, replace = '')
+        comment_cleaned = re.sub(r'[^a-zA-Z0-9\s]', '', comment_no_emoji)
+        emojis_found = emoji.emoji_list(comment_text)
+
+        text_lower = comment_cleaned.lower()
+
+        sentiment = 'neutral'
+        if any(word in text_lower for word in positive_words):
+            sentiment = 'positive'
+        if any(word in text_lower for word in negative_words):
+            sentiment = 'negative'
+
+        has_purchase_intent = any(word in text_lower for word in purchase_intent)
+        is_question = '?' in comment_text
+
+        return {
+            'sentiment': sentiment,
+            'puchase_intent': has_purchase_intent,
+            'is_question': is_question,
+            'emojis': [e['emoji'] for e in emojis_found]
+        }
+
+
 
 # ============ ENGAGEMENT METRICS ============
 
