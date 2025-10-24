@@ -254,7 +254,7 @@ class YouTubeDataProcessor:
 
     # ============ COMMENT PROCESSING ============
 
-    def process_all_comments(self):
+    def process_all_comments(self, force_reprocess=False):
         """
         Process all unprocessed comments
         """
@@ -264,12 +264,20 @@ class YouTubeDataProcessor:
         cursor = conn.cursor()
 
         try:
-            # Get comments that haven't been processed
-            cursor.execute('''
-               SELECT comment_id, video_id, comment_text
-                 FROM comments
-                WHERE sentiment IS NULL
-            ''')
+            if force_reprocess:
+                # Reprocess ALL comments
+                cursor.execute('''
+                    SELECT comment_id, video_id, comment_text
+                      FROM comments
+                     WHERE comment_text IS NOT NULL
+                ''')
+            else:
+                # Get comments that haven't been processed
+                cursor.execute('''
+                    SELECT comment_id, video_id, comment_text
+                      FROM comments
+                     WHERE sentiment IS NULL
+                ''')
 
             comments = cursor.fetchall()
             self.logger.info(f"Processing {len(comments)} new comments")
@@ -314,7 +322,7 @@ class YouTubeDataProcessor:
         ''', (results['sentiment'],
               results['purchase_intent'],
               results['is_question'],
-              json.dump(results['emojis']),
+              json.dumps(results['emojis']),
               comment_id,
               video_id
         ))
@@ -437,6 +445,7 @@ class YouTubeDataProcessor:
 
         text_lower = comment_cleaned.lower()
         words = text_lower.split()
+        words_set = set(words)
 
         # Sentiment scoring
         positive_count = sum(1 for word in words if word in positive_words)
@@ -449,7 +458,7 @@ class YouTubeDataProcessor:
         else:
             sentiment = 'neutral'
 
-        has_purchase_intent = any(word in text_lower for word in purchase_intent)
+        has_purchase_intent = any(word in words_set for word in purchase_intent)
         is_question = '?' in comment_text
 
         return {
@@ -528,7 +537,7 @@ class YouTubeDataProcessor:
         self.process_all_videos()
 
         # Step 3: Process comments
-        self.process_all_comments()
+        self.process_all_comments(force_reprocess=True)
 
         # Step 4: Calculate metrics
         self.calculate_engagement_metrics()
