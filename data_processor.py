@@ -253,6 +253,7 @@ class YouTubeDataProcessor:
         ))
 
     # ============ COMMENT PROCESSING ============
+
     def process_all_comments(self):
         """
         Process all unprocessed comments
@@ -271,7 +272,7 @@ class YouTubeDataProcessor:
             ''')
 
             comments = cursor.fetchall()
-            self.logger.info(f"Processing {len(comments)} new videos")
+            self.logger.info(f"Processing {len(comments)} new comments")
 
             for comment_id, video_id, comment_text in comments:
                 try:
@@ -279,7 +280,7 @@ class YouTubeDataProcessor:
                         conn, comment_id, video_id, comment_text
                     )
                 except Exception as e:
-                    self.logger.error(f"Failed to process video {comment_id}: {e}")
+                    self.logger.error(f"Failed to process comment {comment_id}: {e}")
             
             conn.commit()
             self.logger.info("Comment processing completed")
@@ -303,14 +304,19 @@ class YouTubeDataProcessor:
         
         # Store results
         cursor.execute('''
-            INSERT OR REPLACE INTO comments
-            (comment_id, video_id, sentiment, purchase_intent, is_question)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (comment_id,
-              video_id,
-              results['sentiment'],
+            UPDATE comments
+            SET sentiment = ?,
+                purchase_intent = ?,
+                is_question = ?,
+                emojis = ?
+            WHERE comment_id = ?
+                 AND video_id = ?
+        ''', (results['sentiment'],
               results['purchase_intent'],
-              results['is_question']
+              results['is_question'],
+              json.dump(results['emojis']),
+              comment_id,
+              video_id
         ))
 
     
@@ -417,24 +423,38 @@ class YouTubeDataProcessor:
         """
         Simple rule-based sentiment
         """
+        if not comment_text:
+            return {
+                'sentiment': 'neutral',
+                'purchase_intent': False,
+                'is_question': False,
+                'emojis': []
+            }
+        
         comment_no_emoji = emoji.replace_emoji(comment_text, replace = '')
         comment_cleaned = re.sub(r'[^a-zA-Z0-9\s]', '', comment_no_emoji)
         emojis_found = emoji.emoji_list(comment_text)
 
         text_lower = comment_cleaned.lower()
+        words = text_lower.split()
 
-        sentiment = 'neutral'
-        if any(word in text_lower for word in positive_words):
+        # Sentiment scoring
+        positive_count = sum(1 for word in words if word in positive_words)
+        negative_count = sum(1 for word in words if word in negative_words)
+
+        if positive_count > negative_count:
             sentiment = 'positive'
-        if any(word in text_lower for word in negative_words):
+        elif negative_count > positive_count:
             sentiment = 'negative'
+        else:
+            sentiment = 'neutral'
 
         has_purchase_intent = any(word in text_lower for word in purchase_intent)
         is_question = '?' in comment_text
 
         return {
             'sentiment': sentiment,
-            'puchase_intent': has_purchase_intent,
+            'purchase_intent': has_purchase_intent,
             'is_question': is_question,
             'emojis': [e['emoji'] for e in emojis_found]
         }
@@ -507,7 +527,10 @@ class YouTubeDataProcessor:
         # Step 2: Process videos
         self.process_all_videos()
 
-        # Step 3: Calculate metrics
+        # Step 3: Process comments
+        self.process_all_comments()
+
+        # Step 4: Calculate metrics
         self.calculate_engagement_metrics()
 
         self.logger.info('Pipeline completed successfully')
