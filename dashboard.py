@@ -20,8 +20,8 @@ st.title('YouTube Channel Analytics Dashboard')
 # Color palette
 COLORS = {
     'primary': '#2C3E50',
-    'accent': '#E74C3C',
-    'success': '#27AE60',
+    'accent': '#52366F',
+    'success': '#035453',
     'info': '#3498DB'
 }
 
@@ -87,66 +87,73 @@ if not df_trend.empty:
 else:
     st.info('No engagement data available for selected channels')
 
-# ============ ROW 2: Top Videos & Engagement by Brand ============
-col1, col2 = st.columns([1, 1])
+# ============ ROW 2: Top Performing Video Table  ============
 
-with col1:
-    st.subheader('Top Performing Videos')
-    query = f"""
-        WITH latest_metrics AS (
-            SELECT video_id, MAX(id) AS max_id
-              FROM video_metrics
+st.subheader('Top Performing Videos')
+
+query = f"""
+    WITH latest_metrics AS (
+      SELECT video_id, MAX(id) AS max_id
+        FROM video_metrics
+       GROUP BY video_id
+    )
+    SELECT vm.title, tc.channel_name, vem.engagement_rate, vm.view_count
+      FROM video_metrics vm
+      JOIN latest_metrics lm
+        ON vm.video_id = lm.video_id
+          AND vm.id = lm.max_id
+      JOIN processed_videos pv
+        ON vm.video_id = pv.video_id
+      JOIN video_engagement_metrics vem
+        ON pv.video_id = vem.video_id
+      JOIN tracking_config tc
+        ON pv.channel_id = tc.channel_id
+     WHERE pv.channel_id IN ({channel_id_list})
+          AND vem.id IN (
+            SELECT MAX(id) FROM video_engagement_metrics
+             WHERE video_id IN (SELECT video_id FROM processed_videos WHERE channel_id IN ({channel_id_list}))
              GROUP BY video_id
-        )
-        SELECT vm.title, vem.engagement_rate, vm.view_count
-          FROM video_metrics vm
-          JOIN latest_metrics lm
-            ON vm.video_id = lm.video_id
-              AND vm.id = lm.max_id
-          JOIN processed_videos pv
-            ON vm.video_id = pv.video_id
-          JOIN video_engagement_metrics vem
-            ON pv.video_id = vem.video_id
-         WHERE pv.channel_id IN ({channel_id_list})
-              AND vem.id IN (
-                  SELECT MAX(id) FROM video_engagement_metrics
-                   WHERE video_id IN (SELECT video_id FROM processed_videos WHERE channel_id IN ({channel_id_list}))
-                   GROUP BY video_id
-              )
-         ORDER BY vem.engagement_rate DESC
-         LIMIT 10
+            )
+     ORDER BY vem.engagement_rate DESC
+     LIMIT 10
 """
-    top_videos = pd.read_sql_query(query, conn)
+top_videos = pd.read_sql_query(query, conn)
 
-    if not top_videos.empty:
-        top_videos['engagement_rate'] = (top_videos['engagement_rate'] * 100).round(2)
-        st.dataframe(
-            top_videos.rename(columns={
-                'title': 'Title',
-                'engagement_rate': 'Engagement %',
-                'view_count': 'Views'
-            }),
-           use_container_width = True,
-           height = 400,
-           hide_index=True
-        )
-    else:
-        st.info('No video data available')
+if not top_videos.empty:
+    top_videos['engagement_rate'] = (top_videos['engagement_rate'] * 100).round(2)
+    st.dataframe(
+        top_videos.rename(columns={
+            'title': 'Title',
+            'channel_name': 'Channel',
+            'engagement_rate': 'Engagement %',
+            'view_count': 'Views'
+        }),
+        use_container_width = True,
+        height = 400,
+        hide_index=True,
+        column_config={
+            'Channel': st.column_config.TextColumn(width='small'),
+            'Video Title': st.column_config.TextColumn(width='large')
+        }
+    )
 
-with col2:
-# Engagement by brands mentioned (bar chart)
-    st.subheader('Engagement by Brand')
-    query = f"""
-        SELECT pv.video_id, pv.brands_mentioned, vem.engagement_rate
-          FROM processed_videos pv
-          LEFT JOIN video_engagement_metrics vem
-            ON pv.video_id = vem.video_id
-         WHERE pv.channel_id IN ({channel_id_list})
-              AND vem.id IN (
-                  SELECT MAX(id) FROM video_engagement_metrics
-                   WHERE video_id IN (SELECT video_id FROM processed_videos WHERE channel_id IN ({channel_id_list}))
-                  GROUP BY video_id
-     )
+else:
+    st.info('No video data available')
+
+# ============ ROW 3: Engagement by Brand Bar Chart ============
+
+st.subheader('Engagement by Brand')
+query = f"""
+    SELECT pv.video_id, pv.brands_mentioned, vem.engagement_rate
+      FROM processed_videos pv
+      LEFT JOIN video_engagement_metrics vem
+        ON pv.video_id = vem.video_id
+     WHERE pv.channel_id IN ({channel_id_list})
+          AND vem.id IN (
+          SELECT MAX(id) FROM video_engagement_metrics
+           WHERE video_id IN (SELECT video_id FROM processed_videos WHERE channel_id IN ({channel_id_list}))
+           GROUP BY video_id
+          )
 """
 
 df_brands = pd.read_sql_query(query, conn)
@@ -173,14 +180,14 @@ if brands_list:
     brand_engagement_filtered = brand_engagement[brand_engagement.index.isin(brands_with_enough_data)]
 
     fig = px.bar(
-        x = brand_engagement.values,
-        y = brand_engagement.index,
-        orientation='h',
+        x = brand_engagement.index,
+        y = brand_engagement.values,
         color_discrete_sequence=[COLORS['accent']],
         labels = {'x': 'Median Engagement Rate', 'y': 'Brand'}
     )
     fig.update_layout(height = 400, showlegend = False,
-                      margin = dict(l=0, t=0, b=0)) # l: left, t: top, b: bottom
+                      xaxis_tickangle = -45,
+                      margin = dict(l=0, r=0, t=10, b=80)) # l: left, t: top, b: bottom
     st.plotly_chart(fig, use_container_width=True)
     st.info(f'Showing {len(brand_engagement_filtered)} brands with 3+ mentions')
 else:
