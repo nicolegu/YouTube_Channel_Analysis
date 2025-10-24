@@ -193,7 +193,7 @@ if brands_list:
 else:
     st.info('No brand data available')
 
-# ============ ROW 3: Product Categories ============
+# ============ ROW 4: Product Categories ============
 
 st.subheader('Product Categories Coverage')
 query = f"""
@@ -234,6 +234,131 @@ if product_category_list:
 
 else:
     st.info('No product category data available')
+
+
+# ============ ROW 5: Overall Sentiment Distribution (Pie Chart) ============
+
+st.subheader('Comment Sentiment Distribution')
+
+query = f"""
+    SELECT sentiment, COUNT(*) as count
+      FROM comments c
+      JOIN processed_videos pv
+        ON c.video_id = pv.video_id
+     WHERE pv.channel_id IN ({channel_id_list})
+          AND sentiment IS NOT NULL
+     GROUP BY sentiment
+"""
+
+df_sentiment = pd.read_sql_query(query, conn)
+
+fig = px.pie(df_sentiment, values = 'count', names = 'sentiment',
+             color = 'sentiment',
+             color_discrete_map={'positive': '#0A372F',
+                                 'negative': '#F06F0E',
+                                 'neutral': '#FFB342'}
+            )
+st.plotly_chart(fig)
+
+# ============ ROW 6: Purchase Intent (Table) ============
+
+st.subheader('Purchase Intent Signals')
+query = f"""
+    SELECT tc.channel_name, vm.title, c.comment_text, c.author_name
+      FROM comments c
+      JOIN video_metrics vm
+        ON c.video_id = vm.video_id
+      JOIN processed_videos pv
+        ON c.video_id = pv.video_id
+      JOIN tracking_config tc
+        ON pv.channel_id = tc.channel_id
+     WHERE pv.channel_id IN ({channel_id_list})
+          AND c.purchase_intent = 1
+     ORDER BY c.published_at DESC
+     LIMIT 20
+"""
+
+purchase_comments = pd.read_sql_query(query, conn)
+
+purchase_comments['comment_preview'] = purchase_comments['comment_text'].str[:100] + '...'
+
+st.dataframe(
+    purchase_comments[['channel_name', 'title', 'comment_preview', 'author_name']].rename(columns = {
+        'channel_name': 'Channel',
+        'title': 'Video',
+        'comment_preview': 'Comment',
+        'author_name': 'Author'
+        }
+    ),
+    use_container_width=True,
+    height=400,
+    hide_index=True,
+    column_config={
+        'Channel': st.column_config.TextColumn(width = 'small'),
+        'Comment': st.column_config.TextColumn(
+            width='large',
+            help='Customer comments expressing purchase interest'
+            ),
+        'Video': st.column_config.TextColumn(width = 'medium'),
+        'Author': st.column_config.TextColumn(width = 'small')
+        }
+)
+
+st.subheader('Full Comments')
+for idx, row in purchase_comments.iterrows():
+    with st.expander(f"💬{row['author_name']} on {row['title']}..."):
+        st.write(row['comment_text'])
+
+
+# ============ ROW 7: Recent Questions Asked (Table) ============
+
+st.subheader('Recent Customer Questions')
+st.caption('Latest questions from viewers - reveals customer interests and potential content ideas')
+
+query = f"""
+    SELECT c.comment_text, vm.title, tc.channel_name, c.published_at
+      FROM comments c
+      JOIN video_metrics vm
+        ON c.video_id = vm.video_id
+      JOIN processed_videos pv
+        ON c.video_id = pv.video_id
+      JOIN tracking_config tc
+        ON pv.channel_id = tc.channel_id
+     WHERE pv.channel_id IN ({channel_id_list})
+          AND c.is_question = 1
+     ORDER BY c.published_at DESC
+     LIMIT 20
+"""
+
+questions = pd.read_sql_query(query, conn)
+
+questions['comment_preview'] = questions['comment_text'].str[:100] + '...'
+
+if not questions.empty:
+    st.dataframe(
+        questions[['comment_preview', 'title', 'channel_name', 'published_at']].rename(columns={
+            'comment_preview': 'Question',
+            'title': 'Video',
+            'channel_name': 'Channel',
+            'published_at': 'Date'
+        }),
+        use_container_width=True,
+        height=400,
+        hide_index=True,
+        column_config={
+            'Question': st.column_config.TextColumn(width='large'),
+            'Video': st.column_config.TextColumn(width='medium'),
+            'Channel': st.column_config.TextColumn(width='small'),
+            'Date': st.column_config.DatetimeColumn(width='small')
+        }
+    )
+
+    st.subheader('Full Questions')
+    for idx, row in questions.iterrows():
+        with st.expander(f"🤔{row['title']} on {row['published_at']}..."):
+            st.write(row['comment_text'])
+else:
+    st.info('No questions found')
 
 conn.close()
 
