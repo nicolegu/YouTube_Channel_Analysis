@@ -60,3 +60,17 @@ brands = {'paper': [
               'Green Flash', 'Sheaffer', 'Wearingeul', 'Cross', 'Clarto', 'Matsubokkuri',
               'OLFA', 'Girologic', 'UGears', 'Journalize', 'Greeting Life', 'Writech']
 }
+
+
+# Keywords for analyzing comment sentiment
+positive_words = ['love', 'amazing', 'great', 'perfect', 'best', 'beautiful',
+                  'satisfying', 'pretty', 'cute', 'nice', 'adorable', 'fantastic',
+                  'excellent', 'wonderful', 'awesome', 'gorgeous', 'stunning']
+
+negative_words = ['hate', 'terrible', 'bad', 'worst', 'disappointed', 'awful',
+                  'horrible', 'ugly', 'poor', 'waste', 'regret', 'useless']
+
+purchase_intent = ['where', 'buy', 'need', 'want', 'order', 'money', 'wallet',
+                   'stock', 'available', 'price', 'request', 'restock', 'purchase', 'notification',
+                   'sell', 'shop', 'store', 'link', 'amazon','shipping', 'delivery', 'checkout',
+                   'cart', 'afford', 'expensive', 'cheap', 'deal', 'sale', 'discount']
