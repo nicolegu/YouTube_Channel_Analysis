@@ -168,7 +168,7 @@ class YouTubeDataProcessor:
 
     # ============ VIDEO PROCESSING ============
 
-    def process_all_videos(self):
+    def process_all_videos(self, force_reprocess = False):
         """
         Process all unprocessed video
         """
@@ -178,23 +178,32 @@ class YouTubeDataProcessor:
         cursor = conn.cursor()
 
         try:
-            # Get videos that haven't been processed yet
-            cursor.execute('''
-                SELECT vm.video_id, vm.channel_id, vm.title, vm.duration, vm.published_at
-                  FROM video_metrics vm
-                  LEFT JOIN processed_videos pv
-                    ON vm.video_id = pv.video_id
-                 WHERE pv.video_id IS NULL
-                 GROUP BY vm.video_id
-            ''')
+            if force_reprocess:
+                # Reprocess all videos
+                cursor.execute('''
+                    SELECT vm.video_id, vm.channel_id, vm.title, vm.duration, vm.published_at, vm.description
+                      FROM video_metrics vm
+                     WHERE vm.title IS NOT NULL
+                     GROUP BY vm.video_id
+                ''')
+            else:
+                # Get videos that haven't been processed yet
+                cursor.execute('''
+                    SELECT vm.video_id, vm.channel_id, vm.title, vm.duration, vm.published_at, vm.description
+                      FROM video_metrics vm
+                      LEFT JOIN processed_videos pv
+                        ON vm.video_id = pv.video_id
+                     WHERE pv.video_id IS NULL
+                     GROUP BY vm.video_id
+                ''')
 
             videos = cursor.fetchall()
             self.logger.info(f"Processing {len(videos)} new videos")
 
-            for video_id, channel_id, title, duration, published_at in videos:
+            for video_id, channel_id, title, duration, published_at, description in videos:
                 try:
                     self.process_single_videos(
-                        conn, video_id, channel_id, title, duration, published_at
+                        conn, video_id, channel_id, title, duration, published_at, description
                     )
                 except Exception as e:
                     self.logger.error(f"Failed to process video {video_id}: {e}")
@@ -209,7 +218,7 @@ class YouTubeDataProcessor:
         finally:
             conn.close()
 
-    def process_single_videos(self, conn, video_id, channel_id, title, duration, published_at):
+    def process_single_videos(self, conn, video_id, channel_id, title, duration, published_at, description):
         """
         Process a single video and store results
         """
@@ -222,7 +231,7 @@ class YouTubeDataProcessor:
         categories = self.categorize_video(processed['title_clean'])
 
         # Extract brands
-        brands_found = self.extract_brands_from_title(title)
+        brands_found = self.extract_brands_from_content(title, description)
 
         # Convert duration
         duration_seconds = self.parse_duration(duration) if duration else None
@@ -391,6 +400,50 @@ class YouTubeDataProcessor:
                         'brand': brand,
                         'category': category
                     })
+
+        return brands_found
+    
+    def extract_brands_from_content(self, description, title):
+        """
+        Extract mentioned brands from both title and description
+        """
+        combined_text = f"{title or ''} {description or ''}".lower()
+
+        if not combined_text.strip():
+            return []
+        
+        # Split into words for exact matching
+        words = re.findall(r'\b\w+\b', combined_text)
+        words_set = set(words)
+
+        brands_found = []
+        brands_seen = set()
+
+        for category, brand_list in brands.items():
+            for brand in brand_list:
+                brand_lower = brand.lower()
+
+                # Skip if we've already found this brand
+                if brand in brands_seen:
+                    continue
+                
+                # Check multi-word brands 
+                if ' ' in brand_lower or "'" in brand_lower:
+                    if brand_lower in combined_text:
+                        brands_found.append({
+                            'brand': brand,
+                            'category': category
+                        })
+
+                        brands_seen.add(brand)
+
+                elif brand_lower in words_set:
+                    brands_found.append({
+                        'brand': brand,
+                        'category': category
+                    })
+
+                    brands_seen.add(brand)
 
         return brands_found
 
