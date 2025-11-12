@@ -231,7 +231,8 @@ class YouTubeDataProcessor:
         categories = self.categorize_video(processed['title_clean'])
 
         # Extract brands
-        brands_found = self.extract_brands_from_content(title, description)
+        combined_text = f"{title or ''} {description or ''}"
+        brands_found = self.extract_brands_from_text(combined_text)
 
         # Convert duration
         duration_seconds = self.parse_duration(duration) if duration else None
@@ -318,6 +319,9 @@ class YouTubeDataProcessor:
         
         # Get results of comment analysis
         results = self.analyze_comment_sentiment(comment_text)
+
+        # Extract brands from comment
+        brands_in_comment = self.extract_brands_from_text(comment_text)
         
         # Store results
         cursor.execute('''
@@ -325,13 +329,17 @@ class YouTubeDataProcessor:
             SET sentiment = ?,
                 purchase_intent = ?,
                 is_question = ?,
-                emojis = ?
+                emojis = ?,
+                brands_mentioned = ?,
+                product_categories = ?
             WHERE comment_id = ?
                  AND video_id = ?
         ''', (results['sentiment'],
               results['purchase_intent'],
               results['is_question'],
               json.dumps(results['emojis']),
+              json.dumps(brands_in_comment),
+
               comment_id,
               video_id
         ))
@@ -381,39 +389,19 @@ class YouTubeDataProcessor:
                 found_content_types.append(category)
 
         return {'products': products, 'content_types': found_content_types}
-    
-    def extract_brands_from_title(self, title):
+        
+    def extract_brands_from_text(self, text):
         """
-        Extract mentioned brands from video title
+        Extract brands from any text (title, description, comment)
+        Return list of {"brands": str, "category": str}
         """
-        if not title:
+        if not text:
             return []
         
-        title_lower = title.lower()
-        brands_found = []
+        text_lower = text.lower()
 
-        for category, brand_list in brands.items():
-            for brand in brand_list:
-            # Check for brand mention (case-insensitive)
-                if brand.lower() in title_lower:
-                    brands_found.append({
-                        'brand': brand,
-                        'category': category
-                    })
-
-        return brands_found
-    
-    def extract_brands_from_content(self, description, title):
-        """
-        Extract mentioned brands from both title and description
-        """
-        combined_text = f"{title or ''} {description or ''}".lower()
-
-        if not combined_text.strip():
-            return []
-        
         # Split into words for exact matching
-        words = re.findall(r'\b\w+\b', combined_text)
+        words = re.findall(r'\b\w+\b', text_lower)
         words_set = set(words)
 
         brands_found = []
@@ -423,26 +411,24 @@ class YouTubeDataProcessor:
             for brand in brand_list:
                 brand_lower = brand.lower()
 
-                # Skip if we've already found this brand
+                # Skip if already found
                 if brand in brands_seen:
                     continue
-                
-                # Check multi-word brands 
+
+                # Multi-word brands (e.g., "TRAVELER'S COMPANY")
                 if ' ' in brand_lower or "'" in brand_lower:
-                    if brand_lower in combined_text:
+                    if brand_lower in text_lower:
                         brands_found.append({
                             'brand': brand,
                             'category': category
                         })
-
                         brands_seen.add(brand)
-
+                # Single-word brands with exact matching
                 elif brand_lower in words_set:
                     brands_found.append({
                         'brand': brand,
                         'category': category
                     })
-
                     brands_seen.add(brand)
 
         return brands_found
