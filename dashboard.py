@@ -360,6 +360,65 @@ if not questions.empty:
 else:
     st.info('No questions found')
 
+
+# ============ ROW 8: Brand sentiment from comments ============
+st.subheader('Brand Sentiment from Comments')
+
+query = f"""
+    SELECT c.brands_mentioned, c.sentiment, c.comment_text
+      FROM comments c
+      JOIN processed_videos pv
+        ON c.video_id = pv.video_id
+     WHERE pv.channel_id IN ({channel_id_list})
+          AND c.brands_mentioned IS NOT NULL
+          AND c.brands_mentioned != '[]'
+"""
+
+temp = pd.read_sql_query(query, conn)
+
+# Parse JSON and aggregate
+brand_sentiment = []
+for idx, row in temp.iterrows():
+    brands = json.loads(row['brands_mentioned'])
+    for brand_obj in brands:
+        brand_sentiment.append({
+            'brand': brand_obj['brand'],
+            'sentiment': row['sentiment']
+        })
+
+brand_sentiment_df = pd.DataFrame(brand_sentiment)
+
+brand_sentiment_pivot = brand_sentiment_df.groupby(['brand', 'sentiment']).size().unstack(fill_value=0)
+
+# Filter brands with at least 5 mentions
+brand_totals = brand_sentiment_pivot.sum(axis = 1)
+brand_sentiment_pivot = brand_sentiment_pivot[brand_totals >= 5]
+brand_sentiment_pivot = brand_sentiment_pivot.sort_values(by = 'positive', ascending = True).tail(10)
+
+fig = px.bar(
+    brand_sentiment_pivot,
+    x = ['positive', 'neutral', 'negative'],
+    y = brand_sentiment_pivot.index,
+    orientation = 'h',
+    labels = {'value': 'Number of Comments', 'variable': 'Sentiment', 'y': 'Brand'},
+    color_discrete_map = {
+        'positive': COLORS['success'],
+        'neutral': '#95a5a6',
+        'negative': COLORS['accent']
+    },
+    title = 'Brand Sentiment from Comments (5+ mentions)'
+)
+
+fig.update_layout(
+    height = 500,
+    xaxis_title = 'Number of Comments',
+    yaxis_title = 'Brand',
+    legend_title = 'Sentiment',
+    barmode = 'stack'
+)
+
+st.plotly_chart(fig, width = 'stretch')       
+
 conn.close()
 
 
