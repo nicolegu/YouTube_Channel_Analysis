@@ -225,10 +225,10 @@ class YouTubeDataProcessor:
         cursor = conn.cursor()
 
         # Clean title and extract emojis
-        processed = self.preprocess_title(title)
+        processed_title = self.preprocess_text(title)
 
         # Categorize
-        categories = self.categorize_video(processed['title_clean'])
+        categories = self.categorize_text(processed_title['text_clean'])
 
         # Extract brands
         combined_text = f"{title or ''} {description or ''}"
@@ -251,12 +251,12 @@ class YouTubeDataProcessor:
         ''', (
             video_id,
             channel_id,
-            processed['title_clean'],
+            processed_title['text_clean'],
             duration_seconds,
             json.dumps(categories['products']),
             json.dumps(categories['content_types']),
             json.dumps(brands_found),
-            json.dumps(processed['emojis']),
+            json.dumps(processed_title['emojis']),
             publish_day,
             publish_hour,
             datetime.now()
@@ -322,6 +322,10 @@ class YouTubeDataProcessor:
 
         # Extract brands from comment
         brands_in_comment = self.extract_brands_from_text(comment_text)
+
+        # Product category extraction
+        processed_comment = self.preprocess_text(comment_text)
+        products_in_comment = self.categorize_text(processed_comment['text_clean'])
         
         # Store results
         cursor.execute('''
@@ -339,53 +343,55 @@ class YouTubeDataProcessor:
               results['is_question'],
               json.dumps(results['emojis']),
               json.dumps(brands_in_comment),
-
+              json.dumps(products_in_comment['products']),
               comment_id,
               video_id
         ))
 
-    
+   
     # ============ TEXT PROCESSING HELPERS ============
 
-    def preprocess_title(self, title):
+    def preprocess_text(self, text):
         """
-        Extract useful info from title with emoji handling
+        Extract useful info from text with emoji handling
+        Return cleaned text and emojis
         """
-        if not title:
-            return {'title_clean': '', 'emojis': []}
+        if not text:
+            return {'text_clean': '', 'emojis': []}
 
-        title_no_emoji = emoji.replace_emoji(title, replace = '')
-        title_cleaned = re.sub(r'[^a-zA-Z0-9\s]', '', title_no_emoji)
-        emojis_found = emoji.emoji_list(title)
+        text_no_emoji = emoji.replace_emoji(text, replace = '')
+        text_cleaned = re.sub(r'[^\w\s\']', '', text_no_emoji)
+        emojis_found = emoji.emoji_list(text)
 
         return {
-            'title_clean': title_cleaned.strip(),
+            'text_clean': text_cleaned.strip(),
             'emojis': [e['emoji'] for e in emojis_found]
         }
     
-    def categorize_video(self, title):
+    def categorize_text(self, text):
         """
-        Categorize video by product type and content type
+        Categorize text by product type and content type
         """
-        if not title:
+        if not text:
             return {'products': [], 'content_types': []}
         
         wnl = WordNetLemmatizer()
-        title_lower = title.lower()
-        words_in_title = title_lower.split()
-        words_in_title = [wnl.lemmatize(word) for word in words_in_title]
-        title_cleaned = ' '.join(words_in_title)
+        text_lower = text.lower()
+        words_in_text = text_lower.split()
+        words_in_text = [wnl.lemmatize(word) for word in words_in_text]
+        text_cleaned = ' '.join(words_in_text)
+
         products = []
         found_content_types = []
         
         # Check product categories
         for category, keywords in product_keywords.items():
-            if any(keyword in title_cleaned for keyword in keywords):
+            if any(keyword in text_cleaned for keyword in keywords):
                 products.append(category)
         
         # Check content types
         for category, keywords in content_types.items():
-            if any(keyword in title_cleaned for keyword in keywords):
+            if any(keyword in text_cleaned for keyword in keywords):
                 found_content_types.append(category)
 
         return {'products': products, 'content_types': found_content_types}
@@ -478,11 +484,8 @@ class YouTubeDataProcessor:
                 'emojis': []
             }
         
-        comment_no_emoji = emoji.replace_emoji(comment_text, replace = '')
-        comment_cleaned = re.sub(r'[^a-zA-Z0-9\s]', '', comment_no_emoji)
-        emojis_found = emoji.emoji_list(comment_text)
-
-        text_lower = comment_cleaned.lower()
+        processed_comment = self.preprocess_text(comment_text)
+        text_lower = processed_comment['text_clean'].lower()
         words = text_lower.split()
         words_set = set(words)
 
@@ -504,7 +507,7 @@ class YouTubeDataProcessor:
             'sentiment': sentiment,
             'purchase_intent': has_purchase_intent,
             'is_question': is_question,
-            'emojis': [e['emoji'] for e in emojis_found]
+            'emojis': processed_comment['emojis']
         }
 
 
@@ -573,7 +576,7 @@ class YouTubeDataProcessor:
             return False
         
         # Step 2: Process videos
-        self.process_all_videos()
+        self.process_all_videos(force_reprocess=True)
 
         # Step 3: Process comments
         self.process_all_comments(force_reprocess=True)
