@@ -264,9 +264,13 @@ st.plotly_chart(fig)
 
 st.subheader('Purchase Intent Signals')
 query = f"""
-    SELECT tc.channel_name, vm.title, c.comment_text, c.author_name
+    SELECT DISTINCT c.comment_id, tc.channel_name, vm.title, c.comment_text, c.author_name
       FROM comments c
-      JOIN video_metrics vm
+      JOIN (
+          SELECT video_id, title
+          FROM video_metrics
+          GROUP BY video_id
+      ) vm
         ON c.video_id = vm.video_id
       JOIN processed_videos pv
         ON c.video_id = pv.video_id
@@ -316,9 +320,13 @@ st.subheader('Recent Customer Questions')
 st.caption('Latest questions from viewers - reveals customer interests and potential content ideas')
 
 query = f"""
-    SELECT c.comment_text, vm.title, tc.channel_name, c.published_at
+    SELECT DISTINCT c.comment_id, c.comment_text, vm.title, tc.channel_name, c.published_at
       FROM comments c
-      JOIN video_metrics vm
+      JOIN (
+          SELECT video_id, title
+          FROM video_metrics
+          GROUP BY video_id
+      ) vm
         ON c.video_id = vm.video_id
       JOIN processed_videos pv
         ON c.video_id = pv.video_id
@@ -392,7 +400,7 @@ brand_sentiment_pivot = brand_sentiment_df.groupby(['brand', 'sentiment']).size(
 
 # Filter brands with at least 5 mentions
 brand_totals = brand_sentiment_pivot.sum(axis = 1)
-brand_sentiment_pivot = brand_sentiment_pivot[brand_totals >= 5]
+brand_sentiment_pivot = brand_sentiment_pivot[brand_totals >= 3]
 brand_sentiment_pivot = brand_sentiment_pivot.sort_values(by = 'positive', ascending = True).tail(10)
 
 fig = px.bar(
