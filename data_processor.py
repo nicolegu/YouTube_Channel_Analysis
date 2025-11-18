@@ -6,6 +6,9 @@ from datetime import datetime
 import logging
 import isodate
 import json
+from sentence_transformers import SentenceTransformer
+import pandas as pd
+from sklearn.cluster import DBSCAN
 from config import product_keywords, content_types, brands, positive_words, negative_words, purchase_intent
 
 class YouTubeDataProcessor:
@@ -347,6 +350,138 @@ class YouTubeDataProcessor:
               comment_id,
               video_id
         ))
+  
+    def cluster_comments(self, channel_id = None, force_recluster = False):
+        """
+        Cluster questions by semantic similarity using sentence transformers
+        Store cluster labels in comments table
+        """      
+        self.logger.info('Starting question clustering...')
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            # Load sentence transformer model
+            self.logger.info('Loading sentence transformer model...')
+            model = SentenceTransformer('all_MiniLM-L6-v2')
+
+            # Get list of channels to process
+            if channel_id:
+                channels = [(channel_id,)] # single element tuple
+            else:
+                cursor.execute('''
+                    SELECT DISTINCT channel_id
+                      FROM tracking_config
+                     WHERE active = 1
+               ''')
+                channels = cursor.fetchall()
+
+            # Process each channel separately
+            for (ch_id,) in channels:
+                cursor.execute('''
+                    SELECT channel_name
+                      FROM tracking_config
+                     WHERE channel_id = ?
+                ''', (ch_id,))
+                channel_name = cursor.fetchall()[0]
+
+                self.logger.info(f'\n{"="*50}')
+                self.logger.info(f'Clustering questions for: {channel_name}')
+                self.logger.info(f'{"="*50}')
+
+                if force_recluster:
+                    # Get all questions
+                    cursor.execute('''
+                        SELECT DISTINCT c.comment_id, c.comment_text
+                          FROM comments c
+                          JOIN processed_videos pv
+                            ON c.video_id = pv.video_id
+                         WHERE c.is_question = 1
+                              AND pv.channel_id = ?
+                    ''', (ch_id,))
+            
+                else:
+                    # Get only questions without cluster assignments
+                    cursor.execute('''
+                        SELECT DISTINCT c.comment_id, c.comment_text
+                          FROM comments c
+                          JOIN processed_videos pv
+                            ON c.video_id = pv.video_id
+                         WHERE c.is_question = 1
+                              AND pv.channel_id = ?
+                              AND (question_cluster_id IS NULL OR question_cluster_id = -1)
+                    ''', (ch_id,))
+            
+                questions = cursor.fetchall()
+
+                if not questions:
+                    self.logger.info(f'No questions to cluster for {channel_name}')
+                    return
+                
+                if len(questions) < 5:
+                    self.logger.info(f'Too few questions ({len(questions)}) for {channel_name}, skipping')
+                    continue
+
+                self.logger.info(f'Clustering {len(questions)} questions for {channel_name}...')
+
+                # Extract comment IDs and texts
+                comment_ids = [q[0] for q in questions]
+                comment_texts = [q[1] for q in questions]
+
+                # Generate embeddings
+                self.logger.info('Generate embeddings...')
+                embeddings = model.encode(comment_texts, show_progress_bar = True)
+
+                # Perform clustering
+                self.logger.info('Performing DBSCAN clustering...')
+                clustering = DBSCAN(
+                    eps = 0.5,      # Distance threshold for grouping
+                    min_samples = 2, # Minimum questions per cluster
+                    metric = 'cosine' # Use cosine similarity
+                ).fit(embeddings)
+
+                cluster_labels = clustering.labels_
+
+                # Prefix cluster IDs with channel id to make them unique across channels
+                # Format: "{channel_id}_{cluster_id}"
+                cluster_labels_with_channelid = [
+                    f"{ch_id}_{label}" if label != -1 else "-1"
+                    for label in cluster_labels
+                ]
+
+                # Count clusters
+                n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
+                n_noise = list(cluster_labels).count(-1)
+
+                self.logger.info(f'Found {n_clusters} clusters for {channel_name}')
+                self.logger.info(f'{n_noise} questions marked as noise (unclustered)')
+                
+                # Store cluster labels
+                for comment_id, cluster_id in zip(comment_ids, cluster_labels_with_channelid):
+                    cursor.execute("""
+                        UPDATE comments
+                           SET question_cluster_id = ?
+                         WHERE comment_id = ?
+                    """, (cluster_id, comment_id))
+                
+                conn.commit()
+
+        except Exception as e:
+            self.logger.error(f'Question clustering failed: {e}')
+            conn.rollback()
+
+        finally:
+            conn.close()
+
+
+
+        
+
+        
+        
+        comments = cursor.fetchall()
+
 
    
     # ============ TEXT PROCESSING HELPERS ============
