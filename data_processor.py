@@ -331,7 +331,7 @@ class YouTubeDataProcessor:
         products_in_comment = self.categorize_text(processed_comment['text_clean'])
         
         # Store results
-        cursor.execute('''
+        cursor.execute("""
             UPDATE comments
             SET sentiment = ?,
                 purchase_intent = ?,
@@ -341,7 +341,7 @@ class YouTubeDataProcessor:
                 product_categories = ?
             WHERE comment_id = ?
                  AND video_id = ?
-        ''', (results['sentiment'],
+        """, (results['sentiment'],
               results['purchase_intent'],
               results['is_question'],
               json.dumps(results['emojis']),
@@ -351,7 +351,7 @@ class YouTubeDataProcessor:
               video_id
         ))
   
-    def cluster_comments(self, channel_id = None, force_recluster = False):
+    def cluster_questions(self, channel_id = None, force_recluster = False):
         """
         Cluster questions by semantic similarity using sentence transformers
         Store cluster labels in comments table
@@ -370,20 +370,20 @@ class YouTubeDataProcessor:
             if channel_id:
                 channels = [(channel_id,)] # single element tuple
             else:
-                cursor.execute('''
+                cursor.execute("""
                     SELECT DISTINCT channel_id
                       FROM tracking_config
                      WHERE active = 1
-               ''')
+                """)
                 channels = cursor.fetchall()
 
             # Process each channel separately
             for (ch_id,) in channels:
-                cursor.execute('''
+                cursor.execute("""
                     SELECT channel_name
                       FROM tracking_config
                      WHERE channel_id = ?
-                ''', (ch_id,))
+                """, (ch_id,))
                 channel_name = cursor.fetchall()[0]
 
                 self.logger.info(f'\n{"="*50}')
@@ -392,18 +392,18 @@ class YouTubeDataProcessor:
 
                 if force_recluster:
                     # Get all questions
-                    cursor.execute('''
+                    cursor.execute("""
                         SELECT DISTINCT c.comment_id, c.comment_text
                           FROM comments c
                           JOIN processed_videos pv
                             ON c.video_id = pv.video_id
                          WHERE c.is_question = 1
                               AND pv.channel_id = ?
-                    ''', (ch_id,))
+                    """, (ch_id,))
             
                 else:
                     # Get only questions without cluster assignments
-                    cursor.execute('''
+                    cursor.execute("""
                         SELECT DISTINCT c.comment_id, c.comment_text
                           FROM comments c
                           JOIN processed_videos pv
@@ -411,7 +411,7 @@ class YouTubeDataProcessor:
                          WHERE c.is_question = 1
                               AND pv.channel_id = ?
                               AND (question_cluster_id IS NULL OR question_cluster_id = -1)
-                    ''', (ch_id,))
+                    """, (ch_id,))
             
                 questions = cursor.fetchall()
 
@@ -466,6 +466,12 @@ class YouTubeDataProcessor:
                     """, (cluster_id, comment_id))
                 
                 conn.commit()
+                
+                # Generate descriptive labels for clusters (pass original numeric labels)
+                self._generate_cluster_labels(cursor, ch_id, channel_name, cluster_labels, comment_texts)
+                conn.commit()
+
+            self.logger.info('\nQuestions clustering completed for all channels')
 
         except Exception as e:
             self.logger.error(f'Question clustering failed: {e}')
@@ -474,14 +480,60 @@ class YouTubeDataProcessor:
         finally:
             conn.close()
 
+    def _generate_cluster_labels(self, cursor, channel_id, channel_name, cluster_labels, comment_texts):
+        """
+        Generate descriptive labels for each cluster based on content
+        Store in a separate cluster_labels table
+        """
+        from collections import Counter
+        import re
 
+        unique_clusters = set(cluster_labels)
+        unique_clusters.discard(-1) # Remove noise cluster
 
+        stopwords = {'the', 'a', 'an', 'is', 'it', 'to', 'and', 'or', 'of', 'in', 'on', 
+                     'for', 'with', 'this', 'that', 'what', 'where', 'how', 'can', 'do',
+                     'does', 'i', 'you', 'your', 'my', 'are', 'have', 'be', 'been'}
         
+        for cluster_id in sorted(unique_clusters):
+            # Get all questions in this cluster
+            indices = [i for i, label in enumerate(cluster_labels) if label == cluster_id]
+            cluster_questions = [comment_texts[i] for i in indices]
 
-        
-        
-        comments = cursor.fetchall()
+            # Extract keywords from all questions in cluster
+            all_words = []
+            for question in cluster_questions:
+                words = re.findall(r'\b[a-z]{3,}\b', question.lower())
+                all_words.extend([w for w in words if w not in stopwords])
 
+            # Find most common words
+            word_counts = Counter(all_words)
+            top_keywords = [word for word, count in word_counts.most_common(3)]
+
+            # Create label from top keywords
+            if top_keywords:
+                label = ' + '.join(top_keywords).title()
+            else:
+                label = f"Topic {cluster_id}"
+
+            # Store 3 example questions
+            examples = cluster_questions[:3]
+            examples_json = json.dumps(examples)
+
+            # Create unique cluster_id with channel prefix
+            unique_cluster_id = f"{channel_id}_{cluster_id}"
+
+            # Insert or update cluster label
+            cursor.execute("""
+                INSERT OR REPLACE INTO question_cluster_labels
+                (cluster_id, channel_id, channel_name, label, example_questions, question_count)
+                VALUES(?, ?, ?, ?, ?, ?)
+            """, (unique_cluster_id, channel_id, channel_name, label, examples_json, len(indices)))
+            
+            # Log cluster info with examples
+            self.logger.info(f'Cluster {cluster_id} ({len(indices)} questions): {label}')
+            for ex in examples:
+                self.logger.info(f'{ex[:100]}...')
 
    
     # ============ TEXT PROCESSING HELPERS ============
