@@ -40,24 +40,45 @@ content_types = {
 brands = {'paper': [
               'Hobonichi', 'Kokuyo', 'Midori', "TRAVELER'S COMPANY", 'Maruman',
               'Rhodia', 'Leuchtturm1917', 'Clairefontaine', 'Yamamoto', 'Stalogy',
-              'LIFE', 'Tomoe River'],
+              #'LIFE', # Commented out, too noisy
+              'Tomoe River', 'Furukawa Paper', 'Ito Bindery', 'Tsubame Note',
+              'Mizushima', 'MT', 'MU', 'BGM', 'Raymay Fujii',
+              'Craft Design Technology', 'King Jim', 'Kyupodo',
+              'La Dolce Vita', 'Apica', 'Slip-On'],
+
           'fountain_pens': [
               'Pilot', 'Sailor', 'Platinum', 'LAMY', 'Kaweco', 'Pelikan', 'TWSBI',
-              'Faber-Castell', 'Parker', 'BENU', 'Opus 88', 'Visconti'],
+              'Faber-Castell', 'Parker', 'BENU', 'Opus 88', 'Visconti',
+              'Taccia Fountain Pens', 'Fisher', 'Sheaffer', 'Cross', 'Retro 51',
+              'Esterbrook', 'BUNGUBOX',
+              'Fine Writing International', 'Kita-Boshi Pencil Co.'],
+
           'ink': [
               'Diamine', "Noodler's", 'Robert Oster', 'Herbin', 'Rohrer & Klingner',
-              'De Atramentis', 'Colorverse', 'Takeda Jimuki', 'Dominant', 'Nagasawa', 'Monteverde'],
+              'De Atramentis', 'Colorverse', 'Takeda Jimuki', 'Dominant', 'Nagasawa', 'Monteverde',
+              'Dominant Industry', 'Ink Institute', 'Rossi', 'Tono & Lims',
+              'Hinodewashi', 'Ferris Wheel Press', 'Tag Stationery'],
+
+
           'pencils_pens': [
               'Uni', 'Pentel', 'Zebra', 'Tombow', 'Sakura', 'Copic', 'Stabilo'],
+
           'art_supplies': [
               'Staedtler', 'Kuretake', 'Blackwing', 'Speedball', "Caran d'Ache",
-              'Koh-I-Noor', 'Deleter', 'Tachikawa', 'Stillman & Birn', 'Winsor & Newton'],
+              'Koh-I-Noor', 'Deleter', 'Tachikawa', 'Stillman & Birn', 'Winsor & Newton',
+              'HMM', 'Daigo', 'Dan Wei Industry', 'Dux', 'Cozyca',
+              'Eric Small Things', 'Girologic', 'ameruu', 'Classiky', 'Gekkoso',
+              'Abbey Sy', 'Deer Forest', 'Shachihata', 'Seed'],
+
           'bags': ['Lihit Lab', 'Doughnut', 'Sun-Star'],
+
           'featured_brands': [
               'JetPens', 'Rotring', 'TOOLS to LIVEBY', 'Sanby', 'Hightide', "Mark's",
-              'Suatelier', 'Retro 51', 'BIGiDESIGN', 'Rickshaw', 'Kakimori', 'Field Notes'],
+              'Suatelier', 'Retro 51', 'BIGiDESIGN', 'Rickshaw', 'Kakimori', 'Field Notes',
+              'The Superior Labor', 'Bechori'],
+
           'new_retailers': [
-              'Green Flash', 'Sheaffer', 'Wearingeul', 'Cross', 'Clarto', 'Matsubokkuri',
+              'Green Flash', 'Sheaffer', 'Wearingeul', 'Clarto', 'Matsubokkuri',
               'OLFA', 'Girologic', 'UGears', 'Journalize', 'Greeting Life', 'Writech']
 }
 
@@ -74,3 +95,15 @@ purchase_intent = ['where', 'buy', 'need', 'want', 'order', 'money', 'wallet',
                    'stock', 'available', 'price', 'request', 'restock', 'purchase', 'notification',
                    'sell', 'shop', 'store', 'link', 'amazon','shipping', 'delivery', 'checkout',
                    'cart', 'afford', 'expensive', 'cheap', 'deal', 'sale', 'discount']
+
+# Keywords to group questions
+topic_patterns = {
+    'availability': ['where', 'buy', 'purchase', 'available', 'stock', 'find', 'get'],
+    'price': ['price', 'cost', 'how much', 'expensive', 'cheap'],
+    'comparison': ['vs', 'versus', 'better', 'difference', 'compare'],
+    'recommendation': ['recommend', 'suggest', 'should i', 'which', 'best'],
+    'usage': ['how to', 'use', 'work', 'apply'],
+    'compatibility': ['compatible', 'fit', 'work with', 'size'],
+    'quality': ['quality', 'durable', 'last', 'worth']
+
+}
