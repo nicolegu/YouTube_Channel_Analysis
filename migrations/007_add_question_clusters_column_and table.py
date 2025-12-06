@@ -10,10 +10,10 @@ def up(conn):
     columns = [col[1] for col in cursor.fetchall()]
 
     if 'question_cluster_id' not in columns:
-        cursor.execute('''
+        cursor.execute("""
            ALTER TABLE comments
            ADD COLUMN question_cluster_id TEXT DEFAULT '-1'
-        ''')
+        """)
     
     # Add cluster label table 
     cursor.execute('''
@@ -33,5 +33,5 @@ def down(conn):
     """
     cursor = conn.cursor()
 
-    cursor.execute('DROP TABLE IF EXITS question_cluster_labels')
+    cursor.execute('DROP TABLE IF EXISTS question_cluster_labels')
 
