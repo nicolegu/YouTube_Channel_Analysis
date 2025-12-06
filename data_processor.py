@@ -9,7 +9,7 @@ import json
 from sentence_transformers import SentenceTransformer
 import pandas as pd
 from sklearn.cluster import DBSCAN
-from config import product_keywords, content_types, brands, positive_words, negative_words, purchase_intent
+from config import product_keywords, content_types, brands, positive_words, negative_words, purchase_intent, topic_patterns
 
 class YouTubeDataProcessor:
     """
@@ -350,13 +350,16 @@ class YouTubeDataProcessor:
               comment_id,
               video_id
         ))
-  
-    def cluster_questions(self, channel_id = None, force_recluster = False):
+
+    def hybrid_question_grouping(self, channel_id = None, force_recluster = False):
         """
-        Cluster questions by semantic similarity using sentence transformers
-        Store cluster labels in comments table
-        """      
-        self.logger.info('Starting question clustering...')
+        Use keyword grouping first, then embeddings for uncategorized questions
+        """
+        # Step 1: Keyword grouping for all questions
+        self.keyword_group_questions()
+        
+        # Step 2: Cluster only "general" questions using embeddings
+        self.logger.info('Starting semantic clustering for general questions...')
 
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -364,8 +367,8 @@ class YouTubeDataProcessor:
         try:
             # Load sentence transformer model
             self.logger.info('Loading sentence transformer model...')
-            model = SentenceTransformer('all_MiniLM-L6-v2')
-
+            model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+            
             # Get list of channels to process
             if channel_id:
                 channels = [(channel_id,)] # single element tuple
@@ -379,55 +382,43 @@ class YouTubeDataProcessor:
 
             # Process each channel separately
             for (ch_id,) in channels:
+                ch_id = str(ch_id) if ch_id else ''
                 cursor.execute("""
                     SELECT channel_name
                       FROM tracking_config
                      WHERE channel_id = ?
                 """, (ch_id,))
-                channel_name = cursor.fetchall()[0]
+                channel_name = cursor.fetchone()[0]
 
                 self.logger.info(f'\n{"="*50}')
-                self.logger.info(f'Clustering questions for: {channel_name}')
+                self.logger.info(f'Clustering general questions for: {channel_name}')
                 self.logger.info(f'{"="*50}')
 
-                if force_recluster:
-                    # Get all questions
-                    cursor.execute("""
-                        SELECT DISTINCT c.comment_id, c.comment_text
-                          FROM comments c
-                          JOIN processed_videos pv
-                            ON c.video_id = pv.video_id
-                         WHERE c.is_question = 1
-                              AND pv.channel_id = ?
-                    """, (ch_id,))
-            
-                else:
-                    # Get only questions without cluster assignments
-                    cursor.execute("""
-                        SELECT DISTINCT c.comment_id, c.comment_text
-                          FROM comments c
-                          JOIN processed_videos pv
-                            ON c.video_id = pv.video_id
-                         WHERE c.is_question = 1
-                              AND pv.channel_id = ?
-                              AND (question_cluster_id IS NULL OR question_cluster_id = -1)
-                    """, (ch_id,))
-            
-                questions = cursor.fetchall()
+                cursor.execute("""
+                    SELECT DISTINCT c.comment_id, c.comment_text
+                      FROM comments c
+                      JOIN processed_videos pv
+                        ON c.video_id = pv.video_id
+                     WHERE c.question_topic = 'general'
+                          AND c.is_question = 1
+                          AND pv.channel_id = ?
+                """, (ch_id,))
 
-                if not questions:
-                    self.logger.info(f'No questions to cluster for {channel_name}')
-                    return
-                
-                if len(questions) < 5:
-                    self.logger.info(f'Too few questions ({len(questions)}) for {channel_name}, skipping')
+                uncategorized = cursor.fetchall()
+
+                if not uncategorized:
+                    self.logger.info(f"No general questions to cluster for {channel_name}")
                     continue
 
-                self.logger.info(f'Clustering {len(questions)} questions for {channel_name}...')
+                if len(uncategorized) < 5:
+                    self.logger.info(f"Too few general questions ({len(uncategorized)}) to cluster for {channel_name}, skipping")
+                    continue
+
+                self.logger.info(f"Clustering {len(uncategorized)} general questions for {channel_name}")
 
                 # Extract comment IDs and texts
-                comment_ids = [q[0] for q in questions]
-                comment_texts = [q[1] for q in questions]
+                comment_ids = [q[0] for q in uncategorized]
+                comment_texts = [q[1] for q in uncategorized]
 
                 # Generate embeddings
                 self.logger.info('Generate embeddings...')
@@ -437,10 +428,10 @@ class YouTubeDataProcessor:
                 self.logger.info('Performing DBSCAN clustering...')
                 clustering = DBSCAN(
                     eps = 0.5,      # Distance threshold for grouping
-                    min_samples = 2, # Minimum questions per cluster
+                    min_samples = 5, # Minimum questions per cluster
                     metric = 'cosine' # Use cosine similarity
                 ).fit(embeddings)
-
+        
                 cluster_labels = clustering.labels_
 
                 # Prefix cluster IDs with channel id to make them unique across channels
@@ -456,7 +447,7 @@ class YouTubeDataProcessor:
 
                 self.logger.info(f'Found {n_clusters} clusters for {channel_name}')
                 self.logger.info(f'{n_noise} questions marked as noise (unclustered)')
-                
+
                 # Store cluster labels
                 for comment_id, cluster_id in zip(comment_ids, cluster_labels_with_channelid):
                     cursor.execute("""
@@ -471,10 +462,10 @@ class YouTubeDataProcessor:
                 self._generate_cluster_labels(cursor, ch_id, channel_name, cluster_labels, comment_texts)
                 conn.commit()
 
-            self.logger.info('\nQuestions clustering completed for all channels')
+            self.logger.info('\nHybrid question grouping completed for all channels')
 
         except Exception as e:
-            self.logger.error(f'Question clustering failed: {e}')
+            self.logger.error(f'Hybrid question grouping failed: {e}')
             conn.rollback()
 
         finally:
@@ -526,7 +517,7 @@ class YouTubeDataProcessor:
             # Insert or update cluster label
             cursor.execute("""
                 INSERT OR REPLACE INTO question_cluster_labels
-                (cluster_id, channel_id, channel_name, label, example_questions, question_count)
+                (cluster_id, channel_id, channel_name, label, example_questions, questions_count)
                 VALUES(?, ?, ?, ?, ?, ?)
             """, (unique_cluster_id, channel_id, channel_name, label, examples_json, len(indices)))
             
@@ -534,6 +525,69 @@ class YouTubeDataProcessor:
             self.logger.info(f'Cluster {cluster_id} ({len(indices)} questions): {label}')
             for ex in examples:
                 self.logger.info(f'{ex[:100]}...')
+
+    def keyword_group_questions(self):
+        """
+        Group questions by keyword patterns (complement to clustering)
+        store in question_topic field
+        """
+        self.logger.info('Grouping questions by keywords...')
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            # Get all questions
+            cursor.execute("""
+                SELECT comment_id, comment_text
+                  FROM comments
+                 WHERE is_question = 1
+                   AND comment_text IS NOT NULL
+            """)
+
+            questions = cursor.fetchall()
+            self.logger.info(f'Analyzing {len(questions)} questions for topic...')
+
+            for comment_id,comment_text in questions:
+                text_lower = comment_text.lower()
+
+                # Find matching topics
+                matched_topics = []
+                for topic, keywords in topic_patterns.items():
+                    if any(keyword in text_lower for keyword in keywords):
+                        matched_topics.append(topic)
+
+                # Store primary topic (or "general" if no match)
+                primary_topic = matched_topics[0] if matched_topics else 'general'
+
+                cursor.execute("""
+                    UPDATE comments
+                       SET question_topic = ?
+                     WHERE comment_id = ?
+                """, (primary_topic, comment_id))
+
+            conn.commit()
+            self.logger.info('Question keyword group completed')
+
+            # Log distribution
+            cursor.execute("""
+                SELECT question_topic, COUNT(*) AS count
+                  FROM comments
+                 WHERE is_question = 1
+                 GROUP BY question_topic
+                 ORDER BY count DESC
+            """)
+
+            self.logger.info('Question topic distribution:')
+            for topic, count in cursor.fetchall():
+                self.logger.info(f'{topic}: {count}')
+
+        except Exception as e:
+            self.logger.error(f'Question keyword grouping failed: {e}')
+            conn.rollback()
+
+        finally:
+            conn.close()
 
    
     # ============ TEXT PROCESSING HELPERS ============
@@ -768,7 +822,12 @@ class YouTubeDataProcessor:
         # Step 3: Process comments
         self.process_all_comments(force_reprocess=True)
 
-        # Step 4: Calculate metrics
+        # Step 4: Cluster questions by semantic similarity
+        # self.cluster_questions(force_recluster=True)
+        # self.keyword_group_questions()
+        self.hybrid_question_grouping(force_recluster=True)
+
+        # Step 5: Calculate metrics
         self.calculate_engagement_metrics()
 
         self.logger.info('Pipeline completed successfully')
